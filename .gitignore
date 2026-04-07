@@ -1,0 +1,6 @@
+# VS Code workspace
+*.code-workspace
+
+# Optional useful ignores
+.vscode/
+"System Volume Information"
