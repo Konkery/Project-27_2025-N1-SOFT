@@ -4,7 +4,6 @@ const { ClassFSM: FSM } = require("./srvFSM");
 const { LIFT_CONSTANTS, FAULTS, STORAGE_CONSTANSTS } = require("./SpiralSectionConstants");
 const { STATES: BROKER_STATES } = require("./srvVendingMachineStates");
 const LIFT_STATUS = BROKER_STATES.SECTIONS.LIFT.STATUS;
-const assert = require("assert");
 let sleep = require('timers/promises').setTimeout;
 /** 
  * @typedef {object} TypeProxyCh
@@ -38,8 +37,13 @@ let sleep = require('timers/promises').setTimeout;
  * @property {string} NEXT_LEVEL_REACHED
  * @property {string} ELEVATE_COMMAND
  * @property {string} ELEVATE_TIMEOUT
- * @property {string} ERROR
- * @property {string} CRIT
+ * @property {string} FAULT
+ */
+
+/**
+ * @typedef {object} TypeTask
+ * @property {Function} res
+ * @property {Function} rej
  */
 
 /**
@@ -48,18 +52,16 @@ let sleep = require('timers/promises').setTimeout;
  * @property {number|undefined} requiredLevel
  * @property {string} state
  * @property {bool} inService 
+ * @property {TypeTask} currentTask
  * @property {import("./srvUtils").TypeTimer} timer
  */
 
-const { LIFT_LEVEL_ON: LIFT_MOTOR_ON, 
-    LIFT_LEVEL_OFF: LIFT_MOTOR_OFF, 
-    LIFT_BOTTOM_TAMPER_ON, 
-    DOUBLE_TRIGGER_WINDOW, 
+const { LIFT_BOTTOM_TAMPER_ON, 
+    LIFT_BOTTOM_TAMPER_DEBOUNCE,
+    // DOUBLE_TRIGGER_WINDOW, 
     ELEVATE_NEXT_MAX_TIME, 
     ELECTR_CURR_STATE, 
     CURRENT_RANGE } = LIFT_CONSTANTS;
-
-// const ClassSpiralSectionLift = ClassSpiralSectionLift.STATE;
 
 class ClassSpiralSectionLift {
     static STATE = {
@@ -67,7 +69,7 @@ class ClassSpiralSectionLift {
         ELEVATING_TO_COLLECT:    'ELEVATING_TO_COLLECT',
         ELEVATING_TO_BOTTOM:     'ELEVATING_TO_BOTTOM',
         ELEVATING_TO_BASE:       'ELEVATING_TO_BASE',
-        OUT_OF_SERVICE:          'OUT_OF_SERVICE',
+        FAULT:          'OUT_OF_SERVICE',
     };
     /**@type {TypeProxyCh} */
     #_ProxyCh;
@@ -83,30 +85,34 @@ class ClassSpiralSectionLift {
     #_CurrentWatch = null;
     /**@type {EventEmitter2} */
     #_Events = new EventEmitter2(); 
+    
     #_StatesGraph = {
         [ClassSpiralSectionLift.STATE.IDLE]: {
-            [this.EVENTS.ELEVATE_TO_BOTTOM_COMMAND]:  { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM, action: this._ElevateToBottom.bind(this) },
-            [this.EVENTS.ELEVATE_TO_BASE_COMMAND]:  { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE,     action: this._ElevateToBottom.bind(this) },
-            [this.EVENTS.ELEVATE_COMMAND]:          { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT,  action: this._ElevateToLevel.bind(this) },
+            [this.EVENTS.ELEVATE_TO_BOTTOM_COMMAND]: { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM,  action: this._ElevateToBottom.bind(this) },
+            [this.EVENTS.ELEVATE_TO_BASE_COMMAND]:   { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE,    action: this._ElevateToBottom.bind(this) },
+            [this.EVENTS.ELEVATE_COMMAND]:           { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT, action: this._ElevateToLevel.bind(this) },
+            [this.EVENTS.FAULT]:                     { state: ClassSpiralSectionLift.STATE.FAULT,                action: this.OnFault.bind(this)},
+            // [this.EVENTS.BOTTOM_LEVEL_REACHED]:      { state: ClassSpiralSectionLift.STATE.FAULT,                
         },
         [ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM] : {
-            [this.EVENTS.BOTTOM_LEVEL_REACHED]:     { state: ClassSpiralSectionLift.STATE.IDLE,                action: ()=>{} },
-            [this.EVENTS.ELEVATE_TIMEOUT]:          { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM, action: this.OnElevateTimeout.bind(this) },
-            [this.EVENTS.IDLE]:                  { state: ClassSpiralSectionLift.STATE.IDLE,                   action: ()=>{} },
+            [this.EVENTS.BOTTOM_LEVEL_REACHED]: { state: ClassSpiralSectionLift.STATE.IDLE,                action: this.Idle.bind(this) },
+            [this.EVENTS.ELEVATE_TIMEOUT]:      { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM, action: this.OnElevateTimeout.bind(this) },
+            [this.EVENTS.FAULT]:                { state: ClassSpiralSectionLift.STATE.FAULT,               action: this.OnFault.bind(this)}
         }, 
         [ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE]: {
             [this.EVENTS.BOTTOM_LEVEL_REACHED]: { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE, action: this.ElevateUpToBaseLevel.bind(this) },
-            [this.EVENTS.BASE_LEVEL_REACHED]:   { state: ClassSpiralSectionLift.STATE.IDLE,              action: ()=>{} },
+            [this.EVENTS.BASE_LEVEL_REACHED]:   { state: ClassSpiralSectionLift.STATE.IDLE,              action: this.Idle.bind(this) },
             [this.EVENTS.ELEVATE_TIMEOUT]:      { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE, action: this.OnElevateTimeout.bind(this) },
-            [this.EVENTS.IDLE]:                 { state: ClassSpiralSectionLift.STATE.IDLE,              action: ()=>{} },
+            [this.EVENTS.FAULT]:                { state: ClassSpiralSectionLift.STATE.FAULT,             action: this.OnFault.bind(this)}
         
         },
         [ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT]: {
-            [this.EVENTS.COLLECT_LEVEL_REACHED]: { state: ClassSpiralSectionLift.STATE.IDLE,                 action: ()=>{} },
+            [this.EVENTS.COLLECT_LEVEL_REACHED]: { state: ClassSpiralSectionLift.STATE.IDLE,                 action: this.Idle.bind(this) },
             [this.EVENTS.ELEVATE_TIMEOUT]:       { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT, action: this.OnElevateTimeout.bind(this) },
-            [this.EVENTS.IDLE]:                  { state: ClassSpiralSectionLift.STATE.IDLE,                 action: ()=>{} },
+            [this.EVENTS.FAULT]:                 { state: ClassSpiralSectionLift.STATE.FAULT,                action: this.OnFault.bind(this)}
         },
-        [ClassSpiralSectionLift.STATE.OUT_OF_SERVICE]: {
+        [ClassSpiralSectionLift.STATE.FAULT]: {
+            [this.EVENTS.ELEVATE_TO_BOTTOM_COMMAND]: { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM,  action: this._ElevateToBottom.bind(this) },
         }
     };
     #_FSM = new FSM({ stateGraph: this.#_StatesGraph, defaultState: ClassSpiralSectionLift.STATE.IDLE, onStateChanged: this.OnStateChanged.bind(this) });
@@ -130,17 +136,16 @@ class ClassSpiralSectionLift {
     get EVENTS() {
         // TODO: check event names
         return ({
-            IDLE:           'idleCemmand',
-            ELEVATE_TO_BASE_COMMAND:'reachBaseCommand',
-            ELEVATE_TO_BOTTOM_COMMAND: 'toBottom',
-            BOTTOM_LEVEL_REACHED:   'bottomTamper',
-            BASE_LEVEL_REACHED:     'bottomLevelReached',
+            IDLE:                   'IDLE',
+            ELEVATE_TO_BASE_COMMAND:'ELEVATE_TO_BASE_COMMAND',
+            ELEVATE_TO_BOTTOM_COMMAND: 'ELEVATE_TO_BOTTOM_COMMAND',
+            BOTTOM_LEVEL_REACHED:   'BOTTOM_LEVEL_REACHED',
+            BASE_LEVEL_REACHED:     'BASE_LEVEL_REACHED',
             NEXT_LEVEL_REACHED:     'NEXT_LEVEL_REACHED',
-            COLLECT_LEVEL_REACHED:  'collectLevelReached',
-            ELEVATE_COMMAND:        'elevateCommand',
-            ELEVATE_TIMEOUT:        'elevateTimeout',
-            ERROR:                  'ERROR',
-            CRIT:                   'CRIT',
+            COLLECT_LEVEL_REACHED:  'COLLECT_LEVEL_REACHED',
+            ELEVATE_COMMAND:        'ELEVATE_COMMAND',
+            ELEVATE_TIMEOUT:        'ELEVATE_TIMEOUT',
+            FAULT:                  'FAULT',
         });
     }
 
@@ -166,20 +171,23 @@ class ClassSpiralSectionLift {
 
     Init() {
         this.InitEventHandlers();
+        this.Stop({ force: true }).catch(e => console.log('[LIFT] Не удалось выполнить reset мотора', e));
         // this.StartCurrentWatch();
-        this.#_FSM.Run(this.#_Events, Object.values(this.EVENTS));
     }
 
     InitEventHandlers() {
         /** Bottom tamper handler */
         const tamperValueEventName = `${this.#_Channels.liftBottomTamper}-value`;
-        let tamperCachedValue = LIFT_CONSTANTS.TAMPER_OFF;
+        let tamperCachedValue = undefined;
+        let debounce = null;
         this.#_ProxyCh.Events.on(tamperValueEventName, ({ Value }) => {
-            if (Value != tamperCachedValue && Value == LIFT_BOTTOM_TAMPER_ON) {
+            if (Value != tamperCachedValue && Value == LIFT_BOTTOM_TAMPER_ON && !debounce) {
                 this.#_Context.timer?.clear();
                 console.log(`[LIFT] обновлен сигнал на тампере: ${Value}`);
-
-                this.#_Events.emit(this.EVENTS.BOTTOM_LEVEL_REACHED);
+                debounce = setTimeout(() => {
+                    debounce = null;
+                }, LIFT_BOTTOM_TAMPER_DEBOUNCE);
+                this.#_FSM.Dispatch(this.EVENTS.BOTTOM_LEVEL_REACHED);
             };
             tamperCachedValue = Value;
         });
@@ -190,9 +198,13 @@ class ClassSpiralSectionLift {
         let cachedValue;
         this.#_ProxyCh.Events.on(levelValueEventName, ({ Value }) => {
             if (Value == cachedValue) return;
-            cachedValue = Value
-            let state = this.#_FSM.State;
+            cachedValue = Value;
             if (Value == LIFT_BOTTOM_TAMPER_ON) {
+                /*if (this.#_FSM.State == ClassSpiralSectionLift.STATE.IDLE) {
+                    console.log(`[LIFT] Сигнал датчика уровня но лифт в IDLE`);
+                    this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_CTRL_UNDEFINED }));
+                }*/
+
                 if (this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT || 
                     this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE ||
                     this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM
@@ -203,13 +215,13 @@ class ClassSpiralSectionLift {
                     if (motorState.cmd == 'Reverse')
                         this.#_Context.currentLevel--;
 
-                    // console.log(`[LIFT DRIVER] Уровень лифта: ${this.#_Context.currentLevel}`);
+                    console.log(`[LIFT DRIVER] Уровень лифта: ${this.#_Context.currentLevel}`);
                     if (this.#_Context.currentLevel == this.#_Context.requiredLevel) {
                         this.#_Context.timer?.clear();
                         if (this.#_Context.currentLevel == 0)
-                            this.#_Events.emit(this.EVENTS.BASE_LEVEL_REACHED);
+                            this.#_FSM.Dispatch(this.EVENTS.BASE_LEVEL_REACHED);
                         else
-                            this.#_Events.emit(this.EVENTS.COLLECT_LEVEL_REACHED);
+                            this.#_FSM.Dispatch(this.EVENTS.COLLECT_LEVEL_REACHED);
                     } 
                 }  
 
@@ -226,7 +238,7 @@ class ClassSpiralSectionLift {
             const shortOverload = this.#_ProxyCh.GetValue(this.#_Channels.current) > LIFT_CONSTANTS.CURRENT_RANGE.OVERLOAD[1];
 
             if (shortUps || shortOverload) {
-                this.#_Events.emit(this.EVENTS.ERROR, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
+                this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
                 this.#_Context.state = BROKER_STATES.SECTIONS.LIFT.STATUS.SHORT_CIRCUIT;
                 return;
             }
@@ -240,67 +252,53 @@ class ClassSpiralSectionLift {
     }
 
     async ElevateToBaseLevel() {
-        return new Promise(async (res, rej) => {
-            if (!this.#_Context.inService)
-                rej();
-            this.#_Events.emit(this.EVENTS.ELEVATE_TO_BASE_COMMAND);
-            
-            this.#_Events.once(this.EVENTS.ERROR, async fault => {
-                this.UpdateState(fault);
-                rej(fault); 
-            });
-            await this.#_Events.waitFor(this.EVENTS.BOTTOM_LEVEL_REACHED);
-            await this.#_Events.waitFor(this.EVENTS.BASE_LEVEL_REACHED);
-            res();
-        }).finally(async () => {
-            await this.Idle();
-        });;
+        return new Promise((res, rej) => {
+            if (this.#_Context.currentTask)
+                return rej();
+
+            this.#_Context.currentTask = { res, rej };
+            this.#_FSM.Dispatch(this.EVENTS.ELEVATE_TO_BASE_COMMAND);
+        });
     }
 
     async ElevateToBottom() {
-        return new Promise(async (res, rej) => {
-            if (!this.#_Context.inService)
-                rej();
-            this.#_Events.emit(this.EVENTS.ELEVATE_TO_BOTTOM_COMMAND);
-            
-            this.#_Events.once(this.EVENTS.ERROR, async fault => {
-                this.UpdateState(fault);
-                rej(fault); 
-            });
-            await this.#_Events.waitFor(this.EVENTS.BOTTOM_LEVEL_REACHED);
-            res();
-
-        }).finally(async () => {
-            await this.Idle();
-        });;
+        return new Promise((res, rej) => {
+            if (this.#_Context.currentTask)
+                return rej();
+            this.#_Context.currentTask = { res, rej };
+            this.#_FSM.Dispatch(this.EVENTS.ELEVATE_TO_BOTTOM_COMMAND);
+        });
     }
 
     EmergencyOff() {}
 
     async ElevateUpToBaseLevel() {
+        console.log(`[LIFT] Переключение полярности`);
+        try {
+            this.Stop();
+        } catch (fault) {
+            this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
+        }
+        await sleep(250);
         this.#_Context.currentLevel = -1;
         this.#_Context.requiredLevel = 0;
 
-        let fault = await this.ElevateUp();
-        if (fault)
-            this.#_Events.emit(this.EVENTS.ERROR, fault);
-        else
+        try {
+            await this.ElevateUp();
+            console.log(`ElevateUp()`);
             this.#_Context.timer = createTimer(this.OnTimeout.bind(this), ELEVATE_NEXT_MAX_TIME).set(); 
-    }
+        } catch (fault) {
+            this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
+        }
+    }  
 
     async ElevateToLevel(requiredLevel) {
         return new Promise((res, rej) => {
-            this.#_Events.emit(this.EVENTS.ELEVATE_COMMAND, requiredLevel);
-            if (!this.#_Context.inService)
-                rej();
-            this.#_Events.once(this.EVENTS.COLLECT_LEVEL_REACHED, res);
-        
-            this.#_Events.once(this.EVENTS.ERROR, async fault => {
-                this.UpdateState(fault);
-                rej(fault); 
-            });
-        }).finally(async () => {
-            await this.Idle();
+            if (this.#_Context.currentTask)
+                return rej();
+
+            this.#_Context.currentTask = { res, rej };
+            this.#_FSM.Dispatch(this.EVENTS.ELEVATE_COMMAND, requiredLevel);
         });
     }
 
@@ -313,52 +311,49 @@ class ClassSpiralSectionLift {
         const up = startLevel < requiredLevel;
         
         this.#_Context.timer?.clear?.();
-
-        let fault = up ? await this.ElevateUp() : await this.ElevateDown();
-        if (fault)
-            this.#_Events.emit(this.EVENTS.ERROR, fault);
-        else 
+        try {
+            up ? await this.ElevateUp() : await this.ElevateDown();
+            console.log(up ? `await this.ElevateUp()` : `await this.ElevateDown()`);
             this.#_Context.timer = createTimer(this.OnTimeout.bind(this), ELEVATE_NEXT_MAX_TIME).set();
+        } catch (fault) {
+            this.#_FSM.Dispatch(this.EVENTS.FAULT, fault); 
+        }           
     }
 
     OnTimeout() {
-        this.#_Events.emit(this.EVENTS.ELEVATE_TIMEOUT);
+        this.#_FSM.Dispatch(this.EVENTS.ELEVATE_TIMEOUT);
     }
 
     async OnElevateTimeout() {
         console.log(`[LIFT] Timeout`);
-        debugger;
         let currState = this.CheckCurrent();
-        let ctx = {...this.#_Context};
     
         switch (currState) {
             case ELECTR_CURR_STATE.OVERLOAD:
                 this.#_Context.timer?.clear();
                 if ((this.#_Context.currentLevel == 0 || this.#_Context.currentLevel == undefined) && this.#_Context.requiredLevel == -1) {
                     console.log(`[LIFT] Bottom reached, tamper or jam fault`);
-                    // this.#_Events.emit(this.EVENTS.BOTTOM_LEVEL_REACHED);
-                    this.#_Events.emit(this.EVENTS.ERROR, new Fault({ code: FAULTS.BOTTOM_TAMPER_FAIL, critical: false }));
+                    this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.BOTTOM_TAMPER_FAIL, critical: false }));
                 } else {
                     console.log(`[LIFT] Lift is stuck`);
-                    this.#_Events.emit(this.EVENTS.ERROR, new Fault({ code: FAULTS.LIFT_OVERLOAD, critical: true }));
+                    this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_OVERLOAD, critical: true }));
                     this.#_Context.state = LIFT_STATUS.OVERLOAD;
                 }
                 break;
             case ELECTR_CURR_STATE.IDLE:
-                this.#_Events.emit(this.EVENTS.ERROR, new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true }));
+                this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true }));
                 this.#_Context.state = LIFT_STATUS.NO_POWER;
                 break;
             case ELECTR_CURR_STATE.WORK_OK:
                 // log motor/mech fault
                 this.#_Context.state = LIFT_STATUS.LEVEL_ERROR;
-                this.#_Events.emit(this.EVENTS.ERROR, new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL, critical: true }));
+                this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL, critical: false }));
                 break;
             case ELECTR_CURR_STATE.SHORT:
                 this.#_Context.state = LIFT_STATUS.SHORT_CIRCUIT;
-                this.#_Events.emit(this.EVENTS.ERROR, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
+                this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
                 break;
             default:
-                throw new Error('Unexpected');
                 break;
         }
     }
@@ -366,27 +361,29 @@ class ClassSpiralSectionLift {
     async _ElevateToBottom() {
         this.#_Context.requiredLevel = -1;
         if (this.#_ProxyCh.GetValue(this.#_Channels.liftBottomTamper) == LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_ON)
-            this.#_Events.emit(this.EVENTS.BOTTOM_LEVEL_REACHED);
-        let fault = await this.ElevateDown();
-        if (fault) {
-            this.#_Events.emit(this.EVENTS.ERROR, fault);
-        } else {
+            this.#_FSM.Dispatch(this.EVENTS.BOTTOM_LEVEL_REACHED);
+        try {
+            await this.ElevateDown();
+            console.log(`ElevateDown()`);
             this.#_Context.timer?.clear();
             if (this.#_Context.state != LIFT_STATUS.LEVEL_ERROR)
                 this.#_Context.timer = createTimer(this.OnTimeout.bind(this), ELEVATE_NEXT_MAX_TIME).set();
+
+        } catch (fault) {
+            this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
         }
     }
     /**
      * @returns {Promise<Fault | null>}
      */    
     async ElevateUp() {
-        return await this.Elevate({ cmd: 'Forward' });   
+        return this.Elevate({ cmd: 'Forward' });   
     }
     /**
      * @returns {Promise<Fault | null>}
      */
     async ElevateDown() {
-        return await this.Elevate({ cmd: 'Reverse' });
+        return this.Elevate({ cmd: 'Reverse' });
     }
 
     /**
@@ -396,54 +393,50 @@ class ClassSpiralSectionLift {
      * @returns 
      */
     async Elevate({ cmd }) {
-        assert.equal(['Forward', 'Reverse'].includes(cmd), true);
+        // if (!['Forward', 'Reverse'].includes(cmd))
 
-        await this.Stop({ immediate: true });
+        await this.Stop({ force: true });
         await sleep(50);
         
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (current_0 >= ELECTR_CURR_STATE.WORK_OK[0]) 
-            return new Fault({ code: FAULTS.LIFT_CTRL_UNDEFINED, critical: true });
+            throw new Fault({ code: FAULTS.LIFT_CTRL_UNDEFINED, critical: true });
 
         let step = 1;
-        let step1Fault = await this.MotorStep(cmd, { step });
-        if (step1Fault) 
-            return step1Fault;
+        await this.MotorStep(cmd, { step });
             
         await sleep(50);
 
         if (this.CheckShortCircuit())
-            return new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+            throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
 
         let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         
-        if (!isWithinTolerance(current_0, current_1, 0.05)) {   // пробой 
+        /*if (!isWithinTolerance(current_0, current_1, 0.05)) {   // пробой 
             console.log(`[LIFT] Current significantly changed (${current_0} -> ${current_1}) after On({ step: 1 })"`);
-            return new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
-        }
+            throw new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
+        }*/
 
         step = 2;
-        let step2Fault = await this.MotorStep(cmd, { step });
-        if (step2Fault) 
-            return step2Fault;
+        await this.MotorStep(cmd, { step });
 
-        await sleep(100);   //TODO test 50ms
+        await sleep(50);   //TODO test 50ms
 
         if (this.CheckShortCircuit())
-            return new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+            throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
 
         let current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
 
-        if (isWithinTolerance(current_0, current_2, 0.05)) {
-            return new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true });    // пробой 
-        }
+        /*if (isWithinTolerance(current_0, current_2, 0.05)) {
+            throw new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true });    // пробой 
+        }*/
     }
 
     /**
      * 
      * @param {Fault} fault 
      */
-    UpdateState(fault) {
+    UpdateStatus(fault) {
 
         switch (fault.code) {
             case FAULTS.BOTTOM_TAMPER_FAIL:
@@ -456,6 +449,7 @@ class ClassSpiralSectionLift {
                 this.#_Context.state = LIFT_STATUS.BLOCKED;
                 break;
             case FAULTS.LEVEL_SENSOR_FAIL:
+                this.#_Context.currentLevel = undefined;
                 this.#_Context.state = LIFT_STATUS.LEVEL_ERROR;
                 break;
             case FAULTS.LIFT_NO_POWER:
@@ -476,89 +470,95 @@ class ClassSpiralSectionLift {
     /**
      * 
      * @param {object} param0
-     * @param {boolean} param0.immediate
+     * @param {boolean} param0.force
      * @returns 
      */
     async Stop(param0) {
-        let { immediate } = param0 ?? {};
+        let { force } = param0 ?? {};
         let curr = this.#_ProxyCh.GetValue(this.#_Channels.current);
         let noMotorActive = curr < CURRENT_RANGE.WORK_OK[0];
-        
-        let fault = (immediate || noMotorActive) 
+            
+        /*(force || noMotorActive) 
             ? await this.MotorStep('Off', { step: undefined }) 
-            : await this.StopPhased();
-        if (fault) 
-            this.#_Events.emit(this.EVENTS.ERROR, fault);
+            : await this.StopPhased();*/
+        return this.StopPhased();
     }
 
     /**
      * 
      * @param {string} cmd 
      * @param {number} step 
-     * @returns {Promise<null|Fault>}
+     * @returns {Promise}
      */
     async MotorStep(cmd, { step }) {
         this.#_ProxyCh.SetValue(
             this.#_Channels.liftMotorCtrl, { cmd, args: [{ step }] })
-        let fault;
+
         let step1Response = await this.#_ProxyCh.Events.waitFor(`${this.#_Channels.liftMotorCtrl}-value`, {
             timeout: LIFT_CONSTANTS.MOTOR_RES_MAX_TIME, 
         }).catch(() => {
             console.log(`Motor error: no response from "${this.#_Channels.liftMotorCtrl} on step ${step}"`);
-            fault = new Fault({ code: FAULTS.IO_TIMEOUT, critical: true });
+            throw new Fault({ code: FAULTS.IO_TIMEOUT, critical: true });
         });
-        if (fault) return fault;
         if (step1Response[0].Value.error) {
             // throw new Error(stepResponse[0].Value.error);
-            return new Fault({ code: FAULTS.IO_DRIVER_ERR, critical: true });
+            throw new Fault({ code: FAULTS.IO_DRIVER_ERR, critical: true });
         }
     }
 
     /**
-     * @returns {Promise<null|Fault>}
+     * @returns {Promise}
      */
     async StopPhased() {
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         let step = 1;
-        let step1Fault = await this.MotorStep('Off', { step });
-        if (step1Fault) 
-            return step1Fault;
+        await this.MotorStep('Off', { step });
         
         await sleep(50);
         
         if (this.CheckShortCircuit())
-            return new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+            throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
 
         let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         
-        if (isWithinTolerance(current_0, current_1, 0.05)) {
+        /*if (isWithinTolerance(current_0, current_1, 0.05)) {
             console.log(`[LIFT] Current is ${current_1} after Off({ step: ${step} })"`);
-            return new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
-        }
+            throw new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
+        }*/
         
         step = 2;
-        let step2Fault = await this.MotorStep('Off', { step });
-        if (step2Fault) 
-            return step2Fault;
+        await this.MotorStep('Off', { step });
+    }
+
+    async OnFault(fault) {
+        try {
+            await this.Stop({ force: true });
+        } catch (innerFault) {
+            console.error('[LIFT] Критический сбой при попытке экстренной остановки', innerFault);
+            this.EmergencyOff();
+        } finally {
+            this.UpdateStatus(fault);
+            this.#_Context.currentTask?.rej?.(fault);
+            this.#_Context.currentTask = null;
+        }
     }
 
     async Idle() {
         this.#_Context.timer?.clear();
-        if (this.MotorOk) {
-            let stopFault = await this.Stop({ immediate: true });
-            if (!stopFault) 
-                return this.#_Events.emit(this.EVENTS.IDLE);
-        }
-        this.EmergencyOff();
-    }
-    
-    async SetOutOfService() {
-        this.#_Context.inService = false;
-        await this.Stop({ immediate: true });
+        try {
+            await this.Stop({ force: false });
+        } catch (fault) {
+            console.error('[LIFT] Ошибка при штатной парковке', fault);
+            this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
+            return; 
+        } 
+
+        this.#_Context.currentTask?.res?.();
+        this.#_Context.currentTask = null;
     }
 
-    OnStateChanged(state) {
-        
+    OnStateChanged({state, prevState}) {
+        console.log(`[LIFT] STATE: ${prevState} -> ${state}`);
     }
     /**
      * 
@@ -585,15 +585,14 @@ class ClassSpiralSectionLift {
 
     Reset() {
         this.#_FSM.Reset();
-        this.#_Context.currentLevel = 0;
+        this.#_Context.currentLevel = undefined;
         this.#_Context.requiredLevel = 0;
         this.#_Context.inService = true;
         this.#_Context.timer?.clear();
         this.#_Context.timer = null;
         if (this.#_CurrentWatch) clearInterval(this.#_CurrentWatch)
+        this.Stop({ force: true });
     }
 }
-
-
 
 module.exports = { ClassSpiralSectionLift};
