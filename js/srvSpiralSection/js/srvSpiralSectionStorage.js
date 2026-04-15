@@ -1,10 +1,11 @@
 const { EventEmitter2 } = require("eventemitter2");
-const { createTimer, ClassFault: Fault, isWithinTolerance } = require("./srvUtils");
+const { createTimer, isWithinTolerance, ClassFault } = require("./srvUtils");
 const { ClassFSM: FSM } = require("./srvFSM");
 const { STORAGE_CONSTANSTS, FAULTS } = require("./SpiralSectionConstants");
 const { STATES: BROKER_STATES } = require("./srvVendingMachineStates");
 
-const MOTOR_RES_MAX_TIME = 100000;
+const MOTOR_RES_MAX_TIME = 200;
+const MONITOR_INTERVAL = 1000;
 let sleep = require('timers/promises').setTimeout;
 
 /** 
@@ -23,15 +24,12 @@ let sleep = require('timers/promises').setTimeout;
  * @property {string} voltageChannel
  */
 
-
 /**
  * @typedef {object} TypeSpiralSectionStorageOpts
  * @property {object} size
  * @property {number} size.rows
  * @property {number} size.cols
  */
-
-//  * @property {[TypeSpiralSectionUnitOpts]} units
 
 /**
  * @typedef {object} TypeSpiralSectionUnitOpts
@@ -40,14 +38,15 @@ let sleep = require('timers/promises').setTimeout;
  * @property {number} tamperInd
  */
 
-
 /**
  * @typedef TypeSpiralSectionUnitEvents
  * @property {string} DISPENSE_COMMAND
  * @property {string} DISPENSED_SINGLE
  * @property {string} COMPLETED
  * @property {string} ROTATE_TIMEOUT
- * @property {string} ERROR
+ * @property {string} FAULT
+ * @property {string} DISPENSE_RESULT
+ * @property {string} RECOVERED
  */
 
 /**
@@ -72,16 +71,24 @@ let sleep = require('timers/promises').setTimeout;
  * @property {number} unitIndex
  * @property {number} itemsRequested
  * @property {number} itemsDispensed
- * @property {import("./srvUtils").TypeTimer} timer
+ */
+
+/**
+ * @typedef {object} TypeTask
+ * @property {Function} res
+ * @property {Function} rej
  */
 
 /**
  * @typedef {object} TypeSpiralSectionUnitContext
  * @property {TypeOrder|null} currentOrder
+ * @property {TypeTask} currentTask
  * @property {number} rows
  * @property {number} cols
  * @property {[TypeUnit]} units
+ * @property {string} state
  * @property {number} stateChangeTimestamp
+ * @property {import("./srvUtils").TypeTimer} timer
  */
 
 /**
@@ -102,7 +109,7 @@ const { ELECTR_CURR_STATE, TAMPER_ON, CURRENT_RANGE, FULL_ROTATION_TIMEOUT } = S
 const STATE = {
     IDLE: 'IDLE',
     DISPENSING: 'COLLECTING ',
-    OUT_OF_SERVICE: 'OUT_OF_SERVICE',
+    FAULT: 'OUT_OF_SERVICE',
 }
 
 class ClassSpiralSectionStorage {
@@ -120,13 +127,16 @@ class ClassSpiralSectionStorage {
     #_StatesGraph = {
         [STATE.IDLE]: {
             [this.EVENTS.DISPENSE_COMMAND]: { state: STATE.DISPENSING,     action: this._Dispense.bind(this) },
-            // [this.EVENTS.ERROR]:            { state: STATE.OUT_OF_SERVICE, action: this.SetOutOfService.bind(this) },
+            [this.EVENTS.FAULT]:            { state: STATE.FAULT,          action: this.OnFault.bind(this) },
         },
         [STATE.DISPENSING]: {
             [this.EVENTS.DISPENSED_SINGLE]: { state: STATE.DISPENSING,     action: this.OnDispensedSingle.bind(this) },
             [this.EVENTS.ROTATE_TIMEOUT]:   { state: STATE.DISPENSING,     action: this.OnTimeout.bind(this) },
-            [this.EVENTS.COMPLETED]:        { state: STATE.IDLE,           action: this.OnCompleted.bind(this) },
-            // [this.EVENTS.ERROR]:            { state: STATE.OUT_OF_SERVICE, action: this.SetOutOfService.bind(this) },
+            [this.EVENTS.COMPLETED]:        { state: STATE.IDLE,           action: this.Idle.bind(this) },
+            [this.EVENTS.FAULT]:            { state: STATE.FAULT,          action: this.OnFault.bind(this) },
+        },
+        [STATE.FAULT]: { 
+            [this.EVENTS.RECOVERED]:       { state: STATE.IDLE, action: this.Idle.bind(this) }
         }
     };
     #_FSM = new FSM({ stateGraph: this.#_StatesGraph, onStateChanged: this.OnStateChanged.bind(this), defaultState: ClassSpiralSectionStorage.STATE.IDLE });
@@ -157,6 +167,7 @@ class ClassSpiralSectionStorage {
         };
         this.Init();
     }
+
     /**
      * @getter
      * @returns {TypeSpiralSectionUnitEvents}
@@ -167,7 +178,8 @@ class ClassSpiralSectionStorage {
             DISPENSED_SINGLE: 'DISPENSED_SINGLE',
             COMPLETED:        'DISPENSED',
             ROTATE_TIMEOUT:   'ROTATE_TIMEOUT',
-            ERROR:            'ERROR',
+            FAULT:            'ERROR',
+            RECOVERED:        'RECOVERED'
         });
     }
 
@@ -176,9 +188,21 @@ class ClassSpiralSectionStorage {
         return this.#_Events;
     }
 
+    get MaxLevel() { return this.#_Context?.rows?.length; }
+
+    /**
+     * 
+     * @param {import("./srvSpiralSection").TypeTransactionCell} param0 
+     * @returns 
+     */
+    IsSpiralOk({ row, column}) {
+        const ind = this.PosToInd({ row, col: column});
+        return this.#_Context.units[ind]?.state == BROKER_STATES.CELLS.STATUS.OK;
+    }
+
     Init() {
         this.InitEventHandlers();
-        this.#_FSM.Run(this.#_Events, Object.values(this.EVENTS));
+        // this.#_FSM.Run(this.#_Events, Object.values(this.EVENTS));
     }
 
     /**
@@ -193,7 +217,7 @@ class ClassSpiralSectionStorage {
             this.#_ProxyCh.Events.on(`${tamperCh}-value`, ({ Value }) => {
                 if (this.#_Polling && Value != cachedValues[i] && Value == TAMPER_ON) {
                     console.log(`[Storage] сигнал с тампера спирали`);
-                    this.#_Events.emit(this.EVENTS.DISPENSED_SINGLE, { tamperInd: i });   
+                    this.#_FSM.Dispatch(this.EVENTS.DISPENSED_SINGLE, { tamperInd: i });   
                 }
                 cachedValues[i] = Value;
             });
@@ -201,19 +225,19 @@ class ClassSpiralSectionStorage {
 
         this.currentMonitorInterv = setInterval(() => {
             let currState = this.CheckCurrent();
-            let ind = this.#_Context.currentOrder?.unitIndex ?? -1;
-            if (ind > -1) switch (currState) {
+            let index = this.#_Context.currentOrder?.unitIndex ?? -1;
+            if (index > -1) switch (currState) {
                 case ELECTR_CURR_STATE.SHORT:
-                    this.#_Context.units[ind].state = BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT;
-                    this.#_Events.emit(this.EVENTS.ERROR, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
+                    this.#_Context.units[index].state = BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT;
+                    this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.LIFT_SHORT_CIRCUIT, index, critical: true }));
                     break;
                 
                 case ELECTR_CURR_STATE.OVERLOAD:
-                    this.#_Context.units[ind].state = BROKER_STATES.CELLS.STATUS.OVERLOAD;
+                    this.#_Context.units[index].state = BROKER_STATES.CELLS.STATUS.OVERLOAD;
                 default:
                     break;
             } 
-        }, 1000); //TODO: add const
+        }, MONITOR_INTERVAL);
     }
 
     // { state, prevState }
@@ -222,6 +246,7 @@ class ClassSpiralSectionStorage {
     }
 
     async OnDispensedSingle({ tamperInd }) {
+        console.log(`[STORAGE] Выдана 1 ед. тмц`);
         const indexInUse = this.#_Context.currentOrder.unitIndex;
         const unitInUse = this.#_Context.units[indexInUse];
 
@@ -230,16 +255,19 @@ class ClassSpiralSectionStorage {
             // await this.MotorOff(indexInUse);
             debugger
         }*/
+        this.#_FSM.Dispatch(this.EVENTS.DISPENSE_RESULT, unitInUse.coords);
         this.UpdateStorageContext({ index: indexInUse }, { dispensed: 1 });
         const { itemsDispensed, itemsRequested } = this.#_Context.currentOrder;
         // if (itemsDispensed > itemsRequested) TODO: log error
+        console.log({ itemsDispensed, itemsRequested });
         if (itemsDispensed >= itemsRequested) {
-            this.#_Context.currentOrder.timer.clear();
-            this.Events.emit(this.EVENTS.COMPLETED, { index: unitInUse.index, itemsDispensed, itemsRequested });
+            this.#_Context.timer.clear();
+            console.log(`[STORAGE] Сброс таймера (1)`);
             this.#_Polling = false;
-            await this.MotorOff(indexInUse);
+            this.#_FSM.Dispatch(this.EVENTS.COMPLETED, { index: unitInUse.index, itemsDispensed, itemsRequested });
         } else {
-            this.#_Context.currentOrder.timer.reset();
+            this.#_Context.timer.reset();
+            console.log(`[STORAGE] Ресет таймера`);
         }
     }
 
@@ -247,58 +275,55 @@ class ClassSpiralSectionStorage {
      * @param {TypeCoords} param0 
      */
     async OnTimeout({ index }) {
-        console.log(`[Storage] dispensing timeout ${new Date().getTime()}`);
-        // TODO write a wrapper method that can use Emergency Off in case of an error
-        /*let _cur = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        let state = (this.#_Channels.current) ? this.CheckCurrent() : ELECTR_CURR_STATE.WORK_OK;// TODO
-
-        switch (state) {
-            case ELECTR_CURR_STATE.IDLE:
-                this.UpdateStorageContext({ index }, { disable: 'single' });
-                break;
-            case ELECTR_CURR_STATE.WORK_OK:
-                this.UpdateStorageContext({ index }, { dispensed: 1, disable: 'single' });
-                break;
-            case ELECTR_CURR_STATE.STUCK:
-                this.UpdateStorageContext({ index }, { disable: 'single' });
-                break;
-
-            default:
-                this.UpdateStorageContext({ index }, { disable: 'single' });
-                // this.#_Events.emit(this.EVENTS.ERROR); TODO
-                break
-        }*/
+        console.log(`[Storage] Таймаут выдачи`);
         this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.TAMPER_ERROR });
+        this.#_FSM.Dispatch(this.EVENTS.DISPENSE_RESULT, unitInUse.coords);
         this.#_Polling = false;
-        await this.MotorOffPhased(index);
+        // await this.MotorOff(index);
         // TODO: сработал тампер который не должен был работать -> вероятно пробой
-        this.#_Context.currentOrder.timer.clear();
-        // this.Events.emit(this.EVENTS.COMPLETED, { index, itemsDispensed: this.#_Context.currentOrder.itemsDispensed, error: true });
-        this.#_Events.emit(this.EVENTS.ERROR, new Fault({ code: FAULTS.TAMPER_ERROR, critical: false }));
+        this.#_Context.timer.clear();
+        console.log(`[STORAGE] Сброс таймера (2)`);
+        this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.TAMPER_ERROR, index, critical: false }));
     }
 
-    /**
-     * @typedef {object} TypeDispensionResult
-     * @property {number} itemsDispensed
-     * @property {number} itemsRequested
-     * @property {boolean} error
-     * 
-     */
-
-    /**
-     * 
-     * @param {} param0 
-     * @param {TypeDispensionResult} param1 
-     * 
-     * @returns {}
-     */
     OnCompleted(/*{ index, itemsDispensed, error }*/) {
         // TODO log
         this.Idle();
     }
+    
+    async OnFault(fault) {
+        try {
+            await this.MotorOff({ force: true });
+            this.UpdateStatus(fault);
+            this.#_Context.currentTask?.rej?.(fault);
+            this.#_Context.currentTask = null;
+            this.#_FSM.Dispatch(this.EVENTS.RECOVERED);
 
-    Idle() {
-        this.#_Context.currentOrder = null;
+        } catch (innerFault) {
+            console.log(`[STORAGE] Inner fault: ${innerFault}`);
+            this.EmergencyOff();
+        }
+    }
+
+    async Idle(/*{ index }*/) {
+        // debugger;
+        this.#_Context.timer?.clear();
+        const index = this.#_Context.currentOrder.unitIndex;
+        console.log(`[STORAGE] Idle({ index: ${index} })`);
+        try {
+            await this.MotorOff(index, { force: true });
+            this.#_Context.currentTask?.res?.();
+            this.#_Context.currentTask = null;
+            this.#_Context.currentOrder = null;
+            this.#_Context.timer = null;
+
+        } catch (fault) {
+            this.EmergencyOff();
+        }
+    }
+
+    EmergencyOff() {
+
     }
 
     /**
@@ -309,61 +334,53 @@ class ClassSpiralSectionStorage {
 
     /**
      * 
-     * @param {object} param0
-     * @param {number} param0.index 
-     * @param {number} param0.itemsRequested
+     * @param {import("./srvSpiralSection").TypeTransactionCell} order
      * 
-     * @returns {Promise<TypeDispenseRes>}
+     * @returns {Promise}
      */
-    async Dispense({ index, itemsRequested }) {
-        return new Promise((res, rej) => {        
-            if (index > this.#_Context.units.length || !(itemsRequested > 0))
-                res({ itemsDispensed: 0, error: true });
-                // return { ok: false, reason: `Invalid argument` };
+    async Dispense(order) {
+        return new Promise((res, rej) => {    
+            const index = this.PosToInd({ row: order.row, col: order.column });    
+            if (index > this.#_Context.units.length || (order.quantity < 1))
+                return rej(new Error('Невалидные параметры'));
 
             let state = this.CheckCurrent(); 
             if (state != ELECTR_CURR_STATE.IDLE) 
-                res({ itemsDispensed: 0, error: true });
+                return rej(new Error(''));
             
-            if (this.#_Context.currentOrder) {
-                res({ itemsDispensed: 0, error: true });
-                // return { ok: false, reason: `Busy processing another order` };
+            if (this.#_Context.currentTask) {
+                return rej(new Error('Выполняется предыдущая операция'));
             }
-            const onErr = fault => { 
-                this.#_Events.removeListener(this.EVENTS.ERROR, onErr);
-                res({ itemsDispensed: this.#_Context.currentOrder.itemsDispensed, error: true }); 
-            }
-            const onComplete = ({ index, itemsDispensed, itemsRequested }) => { 
-                this.#_Events.removeListener(this.EVENTS.COMPLETED, onComplete);
-                res({ index, itemsRequested, itemsDispensed, error: false }); 
-            }
+            this.#_Context.currentTask = { res, rej };
 
-            this.#_Events.on(this.EVENTS.ERROR, onErr);
-            this.#_Events.on(this.EVENTS.COMPLETED, onComplete);
-
-            this.#_Events.emit(this.EVENTS.DISPENSE_COMMAND, { index, itemsRequested });
+            this.#_FSM.Dispatch(this.EVENTS.DISPENSE_COMMAND, order);
         });
     }
 
     /**
      * @method
      * @description
-     * @param {TypeOrder} param0 
-     * @param {number} itemsRequested 
+     * @param {import("./srvSpiralSection").TypeTransactionCell} order 
      */
-    async _Dispense({ index, itemsRequested }) {
+    async _Dispense(order) {
+        const index = this.PosToInd({ row: order.row, col: order.column });
         this.#_Context.currentOrder = {
             unitIndex: index,
-            itemsRequested: itemsRequested,
+            itemsRequested: order.quantity,
             itemsDispensed: 0,
         };
 
-        const onTimeout = (() => this.#_Events.emit(this.EVENTS.ROTATE_TIMEOUT, { index })).bind(this);
-        this.#_Context.currentOrder.timer = createTimer(onTimeout, FULL_ROTATION_TIMEOUT).set();
+        const onTimeout = (() => this.#_FSM.Dispatch(this.EVENTS.ROTATE_TIMEOUT, { index })).bind(this);
+        this.#_Context.timer = createTimer(onTimeout, FULL_ROTATION_TIMEOUT).set();
         
-        let fault = await this.MotorOn(index);
-        if (!fault)
+        try {
+            await this.MotorOnPhased(index);
+            console.log(`[STORAGE] Включен мотор`);
             this.#_Polling = true;
+        } catch (fault) {
+            console.log(`[STORAGE] Ошибка при включении мотора: ${fault}`);
+            this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
+        }   
     }
 
     /**
@@ -397,16 +414,16 @@ class ClassSpiralSectionStorage {
 
         if (state) {
             if (scope == 'single') {
-                this.#_Context.units[index].outOfService = true;
+                this.#_Context.units[index].state = state;
             } else {
                 let { coords: { col, row } } = this.#_Context.units[index];
                 
                 for (let unit of Object.values(this.#_Context.units)) {
-                    if (disable == 'all' || 
-                        disable == 'col' && unit.coords.col == col || 
-                        disable == 'row' && unit.coords.row == row
+                    if (scope == 'all' || 
+                        scope == 'col' && unit.coords.col == col || 
+                        scope == 'row' && unit.coords.row == row
                     )
-                        unit.state = state;
+                    unit.state = state;
                 }
             }
         }
@@ -428,70 +445,30 @@ class ClassSpiralSectionStorage {
 
     /**
      * 
-     * @returns {boolean}
-     */
-    AreAllMotorsOff() {
-        return true
-    }
-
-    /**
-     * 
-     * @param {number} index
-     * @returns {Promise} 
-     */
-    async MotorOn(index) {
-        let fault = await this.MotorOnPhased(index);
-        if (fault) {
-            switch (fault.code) {
-                case FAULTS.ACTUATOR_NO_POWER:
-                    this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.ACTUATOR_NO_POWER });
-                    break;
-                case FAULTS.IO_DRIVER_ERR:
-                    this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
-                    break;
-                
-                case FAULTS.ACTUATOR_SHORT_CIRCUIT:
-                    this.UpdateStorageContext({ index }, { scope: 'row', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
-                    this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT });
-                    break;
-
-                case FAULTS.IO_PORT_ERR:
-                case FAULTS.IO_TIMEOUT:
-                    this.UpdateStorageContext({ index }, { scope: 'all', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
-                    break;
-            }
-            this.#_Events.emit(this.EVENTS.ERROR, fault);
-        }
-    }
-
-    /**
-     * 
      * @param {number} index 
-     * @returns {Promise<null|Fault>}
+     * @returns {Promise}
      */
     async MotorOnPhased(index) {
         let step = 1;
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         
-        let step1Fault = await this.MotorStep('On', { index, step });
-        if (step1Fault) 
-            return step1Fault;
+        await this.MotorStep('On', { index, step });
+
         await sleep(50);
 
         let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (!isWithinTolerance(current_0, current_1, 0.05)) {
             // console.log(`Motor [${index}] error: Source switch broken`);
-            return new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
+            throw new StorageFault({ code: FAULTS.IO_PORT_ERR, index, critical: true });
         }
         step = 2;
-        let step2Fault = await this.MotorStep('On', { index, step });
-        if (step2Fault) 
-            return step2Fault;
+        await this.MotorStep('On', { index, step });
+
         await sleep(50);
 
         let current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (isWithinTolerance(current_1, current_2, 0.05)) {
-            return new Fault({ code: FAULTS.ACTUATOR_NO_POWER, critical: false });
+            throw new StorageFault({ code: FAULTS.ACTUATOR_NO_POWER, index, critical: false });
         }
     }
 
@@ -499,36 +476,13 @@ class ClassSpiralSectionStorage {
      * 
      * @param {number} index 
      * @param {object} param1 
-     * @param {boolean} param1.immediate
-     * @returns {Promise<null|Fault>}
+     * @param {boolean} param1.force
+     * @returns {Promise}
      */
     async MotorOff(index, param1) {
-        let { immediate } = param1 ?? {};
-        let fault = immediate ? await this.MotorStep('Off', { index, step: undefined }) : await this.MotorOffPhased(index);
-        if (fault) {
-            switch (fault.code) {
-                case FAULTS.ACTUATOR_NO_POWER:
-                    this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.ACTUATOR_NO_POWER });
-                    break;
-                case FAULTS.IO_DRIVER_ERR:
-                    this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
-                    break;
-                
-                case FAULTS.IO_PORT_ERR:
-                case FAULTS.IO_TIMEOUT:
-                    this.UpdateStorageContext({ index }, { scope: 'all', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
-                    break;
-            }
-            this.#_Events.emit(this.EVENTS.ERROR, fault);
-        }
-        /*let curr = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        let noMotorActive = curr < ELECTR_CURR_STATE.WORK_OK[0];
-        if (!noMotorActive) {
-            debugger;
-            let fault2 = await this.MotorStep('Off');
-            if (fault2)
-                this.OffEmergency();
-        }*/
+        let { force } = param1 ?? {};
+        // return force ? this.MotorStep('Off', { index, step: undefined }) : this.MotorOffPhased(index);
+        return this.MotorOffPhased(index);
     }
 
     /**
@@ -537,7 +491,7 @@ class ClassSpiralSectionStorage {
      * @param {object} param1
      * @param {number} param1.index 
      * @param {number} param1.step
-     * @returns {Promise<null|Fault>}
+     * @returns {Promise}
      */
     async MotorStep(cmd, param1) {
         const { index, step } = param1 ?? {};
@@ -551,11 +505,11 @@ class ClassSpiralSectionStorage {
             timeout: MOTOR_RES_MAX_TIME,
         }).catch(() => {
             // throw new Error(`Motor [${index}] error: no response from switch "${this.#_Channels.matrixCtrlChannel}"`);
-            return new Fault({ code: FAULTS.IO_TIMEOUT, critical: true });
+            throw new StorageFault({ code: FAULTS.IO_TIMEOUT, index, critical: true });
         });
 
-        if (stepResponse[0].Value.error) {
-            return new Fault({ code: FAULTS.IO_DRIVER_ERR, critical: true });
+        if (stepResponse?.[0]?.Value?.error) {
+            throw new StorageFault({ code: FAULTS.IO_DRIVER_ERR, index, critical: true });
             // throw new Error(step1Response.Value.error);
         }
     }
@@ -563,25 +517,23 @@ class ClassSpiralSectionStorage {
     /**
      * 
      * @param {number} index 
-     * @returns {Promise<null|Fault>}
+     * @returns {Promise}
      */
     async MotorOffPhased(index) {
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         let step = 1;
-        let step1Fault = await this.MotorStep('Off', { index, step });
-        if (step1Fault) 
-            return step1Fault;
-        await sleep(30);
-        let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        await this.MotorStep('Off', { index, step });
+        await sleep(50);
+
+        /*let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (isWithinTolerance(current_0, current_1, 0.05)) {
             // console.log(`Motor [${index} error: Source switch broken`);
             // this.UpdateStorageContext({ index: this.#_Context.currentOrder.unitIndex }, { disable: 'row'})
-            return new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
-        }
+            throw new StorageFault({ code: FAULTS.LIFT_SHORT_CIRCUIT, index, critical: true });
+        }*/
+
         step = 2;
-        let step2Fault = await this.MotorStep('Off', { index, step });
-        if (step2Fault) 
-            return step2Fault;  
+        await this.MotorStep('Off', { index, step });
     }
 
     async OffEmergency() {
@@ -590,7 +542,6 @@ class ClassSpiralSectionStorage {
 
      /**
      * Converts a linear index to row and column indices.
-     * 
      * @param {number} index The linear index (0-based).
      * @returns {{row: number, column: number}} An object containing the row and column.
      */
@@ -599,21 +550,58 @@ class ClassSpiralSectionStorage {
         return { row: Math.floor(index / width), col: index % width };
     }
 
+    PosToInd({ row, col }) {
+        return (row * this.#_Context.cols) + col;
+    }
+
     /**
      * @method
      * @param {number} index 
      * @returns {number}
      */
-    GetLevel(index) {
+    GetLevelByIndex(index) {
         return this.#_Context.rows - Math.floor(index / this.#_Context.cols);
-        // let { row } = this.IndexToPos(index);
-        // return this.#_Context.rows - row; 
     } 
+
+    /**
+     * 
+     * @param {StorageFault} fault 
+     */
+    UpdateStatus(fault) {
+        if (!(fault instanceof StorageFault)) return;
+        const { index } = fault;
+
+        switch (fault.code) {
+            case FAULTS.TAMPER_ERROR:
+                this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.TAMPER_ERROR });
+                break;
+
+            case FAULTS.ACTUATOR_NO_POWER:
+                this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.ACTUATOR_NO_POWER });
+                break;
+
+            case FAULTS.IO_DRIVER_ERR:
+                this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
+                break;
+            
+            case FAULTS.ACTUATOR_SHORT_CIRCUIT:
+                this.UpdateStorageContext({ index }, { scope: 'row', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
+                this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT });
+                break;
+
+            case FAULTS.IO_PORT_ERR:
+            case FAULTS.IO_TIMEOUT:
+                this.UpdateStorageContext({ index }, { scope: 'all', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
+                break;
+        }
+    }
 
     Reset() {
         this.#_FSM.Reset();
+        this.#_Context.currentTask?.rej?.(new Error('Reset'));
+        this.#_Context.currentTask = null;
         this.#_Context.currentOrder = null;
-        this.#_Context.currentOrder?.timer?.clear();
+        this.#_Context.timer?.clear();
         this.#_Context.units = this.#_Context.units.map(u => ({                
             itemsDispensed: 0,
             state: BROKER_STATES.CELLS.STATUS.OK,
@@ -622,5 +610,11 @@ class ClassSpiralSectionStorage {
     }
 }
 
-// let a = new ClassSpiralSectionStorage({advOpts: {rows:12, cols: 8}});
+class StorageFault extends ClassFault {
+    constructor({ code, critical, index }) {
+        super({ code, critical });
+        this.index = index;
+    }
+}
+
 module.exports = { ClassSpiralSectionStorage };
