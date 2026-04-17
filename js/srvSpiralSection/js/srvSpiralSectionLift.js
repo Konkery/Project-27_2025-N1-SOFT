@@ -34,7 +34,6 @@ let sleep = require('timers/promises').setTimeout;
  * @property {string} BOTTOM_LEVEL_REACHED
  * @property {string} COLLECT_LEVEL_REACHED
  * @property {string} BASE_LEVEL_REACHED
- * @property {string} NEXT_LEVEL_REACHED
  * @property {string} ELEVATE_COMMAND
  * @property {string} ELEVATE_TIMEOUT
  * @property {string} FAULT
@@ -50,8 +49,7 @@ let sleep = require('timers/promises').setTimeout;
  * @typedef {object} TypeSpiralSectionLiftContext
  * @property {number|undefined} currentLevel
  * @property {number|undefined} requiredLevel
- * @property {string} state
- * @property {bool} inService 
+ * @property {string} status
  * @property {TypeTask} currentTask
  * @property {import("./srvUtils").TypeTimer} timer
  */
@@ -65,11 +63,11 @@ const { LIFT_BOTTOM_TAMPER_ON,
 
 class ClassSpiralSectionLift {
     static STATE = {
-        IDLE:                    'IDLE',
-        ELEVATING_TO_COLLECT:    'ELEVATING_TO_COLLECT',
-        ELEVATING_TO_BOTTOM:     'ELEVATING_TO_BOTTOM',
-        ELEVATING_TO_BASE:       'ELEVATING_TO_BASE',
-        FAULT:          'OUT_OF_SERVICE',
+        IDLE:                 'IDLE',
+        ELEVATING_TO_COLLECT: 'ELEVATING_TO_COLLECT',
+        ELEVATING_TO_BOTTOM:  'ELEVATING_TO_BOTTOM',
+        ELEVATING_TO_BASE:    'ELEVATING_TO_BASE',
+        FAULT:                'FAULT',
     };
     /**@type {TypeProxyCh} */
     #_ProxyCh;
@@ -78,8 +76,7 @@ class ClassSpiralSectionLift {
     /** @type {TypeSpiralSectionLiftContext} */
     #_Context = {
         currentLevel: undefined,
-        inService: true,
-        state: BROKER_STATES.SECTIONS.LIFT.STATUS.OK
+        status: BROKER_STATES.SECTIONS.LIFT.STATUS.OK
         
     };
     #_CurrentWatch = null;
@@ -134,14 +131,12 @@ class ClassSpiralSectionLift {
      * @returns {TypeSpiralSectionLiftEvents}
      */
     get EVENTS() {
-        // TODO: check event names
         return ({
             IDLE:                   'IDLE',
             ELEVATE_TO_BASE_COMMAND:'ELEVATE_TO_BASE_COMMAND',
             ELEVATE_TO_BOTTOM_COMMAND: 'ELEVATE_TO_BOTTOM_COMMAND',
             BOTTOM_LEVEL_REACHED:   'BOTTOM_LEVEL_REACHED',
             BASE_LEVEL_REACHED:     'BASE_LEVEL_REACHED',
-            NEXT_LEVEL_REACHED:     'NEXT_LEVEL_REACHED',
             COLLECT_LEVEL_REACHED:  'COLLECT_LEVEL_REACHED',
             ELEVATE_COMMAND:        'ELEVATE_COMMAND',
             ELEVATE_TIMEOUT:        'ELEVATE_TIMEOUT',
@@ -150,7 +145,11 @@ class ClassSpiralSectionLift {
     }
 
     get State() {
-        return this.#_Context.state;
+        return this.#_FSM.State;
+    }
+
+    get Status() {
+        return this.#_Context.status;
     }
 
     get Level() {
@@ -158,10 +157,10 @@ class ClassSpiralSectionLift {
     }
 
     get MotorOk() {
-        return this.State == LIFT_STATUS.OK || 
-            this.State == LIFT_STATUS.TAMPER_ERROR || 
-            this.State == LIFT_STATUS.LEVEL_ERROR || 
-            this.State == LIFT_STATUS.OVERLOAD 
+        return this.Status == LIFT_STATUS.OK || 
+            this.Status == LIFT_STATUS.TAMPER_ERROR || 
+            this.Status == LIFT_STATUS.LEVEL_ERROR || 
+            this.Status == LIFT_STATUS.OVERLOAD 
     } 
 
     get Events() {
@@ -173,6 +172,7 @@ class ClassSpiralSectionLift {
         this.InitEventHandlers();
         this.Stop({ force: true }).catch(e => console.log('[LIFT] Не удалось выполнить reset мотора', e));
         // this.StartCurrentWatch();
+        // this.#_FSM.Run(this.#_Events, Object.values(this.EVENTS));
     }
 
     InitEventHandlers() {
@@ -239,13 +239,13 @@ class ClassSpiralSectionLift {
 
             if (shortUps || shortOverload) {
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
-                this.#_Context.state = BROKER_STATES.SECTIONS.LIFT.STATUS.SHORT_CIRCUIT;
+                this.#_Context.status = BROKER_STATES.SECTIONS.LIFT.STATUS.SHORT_CIRCUIT;
                 return;
             }
 
             const overload = this.#_ProxyCh.GetValue(this.#_Channels.current) >= LIFT_CONSTANTS.CURRENT_RANGE.OVERLOAD[0];
             if (overload) {
-                this.#_Context.state = BROKER_STATES.SECTIONS.LIFT.STATUS.OVERLOAD;
+                this.#_Context.status = BROKER_STATES.SECTIONS.LIFT.STATUS.OVERLOAD;
             }
 
         }, 1000);
@@ -295,7 +295,7 @@ class ClassSpiralSectionLift {
     async ElevateToLevel(requiredLevel) {
         return new Promise((res, rej) => {
             if (this.#_Context.currentTask)
-                return rej();
+                return rej('[LIFT] Выполняется предыдущая операция');
 
             this.#_Context.currentTask = { res, rej };
             this.#_FSM.Dispatch(this.EVENTS.ELEVATE_COMMAND, requiredLevel);
@@ -337,20 +337,20 @@ class ClassSpiralSectionLift {
                 } else {
                     console.log(`[LIFT] Lift is stuck`);
                     this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_OVERLOAD, critical: true }));
-                    this.#_Context.state = LIFT_STATUS.OVERLOAD;
+                    this.#_Context.status = LIFT_STATUS.OVERLOAD;
                 }
                 break;
             case ELECTR_CURR_STATE.IDLE:
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true }));
-                this.#_Context.state = LIFT_STATUS.NO_POWER;
+                this.#_Context.status = LIFT_STATUS.NO_POWER;
                 break;
             case ELECTR_CURR_STATE.WORK_OK:
                 // log motor/mech fault
-                this.#_Context.state = LIFT_STATUS.LEVEL_ERROR;
+                this.#_Context.status = LIFT_STATUS.LEVEL_ERROR;
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL, critical: false }));
                 break;
             case ELECTR_CURR_STATE.SHORT:
-                this.#_Context.state = LIFT_STATUS.SHORT_CIRCUIT;
+                this.#_Context.status = LIFT_STATUS.SHORT_CIRCUIT;
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
                 break;
             default:
@@ -366,7 +366,7 @@ class ClassSpiralSectionLift {
             await this.ElevateDown();
             console.log(`ElevateDown()`);
             this.#_Context.timer?.clear();
-            if (this.#_Context.state != LIFT_STATUS.LEVEL_ERROR)
+            if (this.#_Context.status != LIFT_STATUS.LEVEL_ERROR)
                 this.#_Context.timer = createTimer(this.OnTimeout.bind(this), ELEVATE_NEXT_MAX_TIME).set();
 
         } catch (fault) {
@@ -440,26 +440,26 @@ class ClassSpiralSectionLift {
 
         switch (fault.code) {
             case FAULTS.BOTTOM_TAMPER_FAIL:
-                this.#_Context.state = LIFT_STATUS.TAMPER_ERROR;
+                this.#_Context.status = LIFT_STATUS.TAMPER_ERROR;
                 break;
             case FAULTS.IO_DRIVER_ERR:
-                this.#_Context.state = LIFT_STATUS.BLOCKED;
+                this.#_Context.status = LIFT_STATUS.BLOCKED;
                 break;
             case FAULTS.IO_PORT_ERR:
-                this.#_Context.state = LIFT_STATUS.BLOCKED;
+                this.#_Context.status = LIFT_STATUS.BLOCKED;
                 break;
             case FAULTS.LEVEL_SENSOR_FAIL:
                 this.#_Context.currentLevel = undefined;
-                this.#_Context.state = LIFT_STATUS.LEVEL_ERROR;
+                this.#_Context.status = LIFT_STATUS.LEVEL_ERROR;
                 break;
             case FAULTS.LIFT_NO_POWER:
-                this.#_Context.state = LIFT_STATUS.NO_POWER;
+                this.#_Context.status = LIFT_STATUS.NO_POWER;
                 break;
             case FAULTS.LIFT_SHORT_CIRCUIT:
-                this.#_Context.state = LIFT_STATUS.SHORT_CIRCUIT;
+                this.#_Context.status = LIFT_STATUS.SHORT_CIRCUIT;
                 break;
             case FAULTS.LIFT_OVERLOAD:
-                this.#_Context.state = LIFT_STATUS.OVERLOAD;
+                this.#_Context.status = LIFT_STATUS.OVERLOAD;
                 break;
 
             default:
@@ -557,6 +557,7 @@ class ClassSpiralSectionLift {
         this.#_Context.currentTask = null;
     }
 
+
     OnStateChanged({state, prevState}) {
         console.log(`[LIFT] STATE: ${prevState} -> ${state}`);
     }
@@ -585,14 +586,16 @@ class ClassSpiralSectionLift {
 
     Reset() {
         this.#_FSM.Reset();
+        this.#_Context.status = LIFT_STATUS.OK;
         this.#_Context.currentLevel = undefined;
         this.#_Context.requiredLevel = 0;
-        this.#_Context.inService = true;
         this.#_Context.timer?.clear();
         this.#_Context.timer = null;
         if (this.#_CurrentWatch) clearInterval(this.#_CurrentWatch)
         this.Stop({ force: true });
     }
 }
+
+
 
 module.exports = { ClassSpiralSectionLift};
