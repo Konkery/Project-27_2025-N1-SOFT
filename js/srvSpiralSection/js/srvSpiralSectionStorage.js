@@ -58,7 +58,7 @@ let sleep = require('timers/promises').setTimeout;
  * @property {number} itemsLeft
  * @property {number} itemsRequested
  * @property {number} itemsDispensed
- * @property {string} state
+ * @property {string} status
  * @property {number} tamperInd
  */
 
@@ -162,7 +162,7 @@ class ClassSpiralSectionStorage {
                 itemsLeft: 999,
                 capacity: 999,
                 itemsDispensed: 0,
-                state: BROKER_STATES.CELLS.STATUS.OK
+                status: BROKER_STATES.CELLS.STATUS.OK
             }))
         };
         this.Init();
@@ -188,16 +188,17 @@ class ClassSpiralSectionStorage {
         return this.#_Events;
     }
 
-    get MaxLevel() { return this.#_Context?.rows?.length; }
+    get MaxLevel() { return this.#_Context?.rows; }
 
+    get State() { return this.#_FSM.State; }
     /**
      * 
      * @param {import("./srvSpiralSection").TypeTransactionCell} param0 
      * @returns 
      */
-    IsSpiralOk({ row, column}) {
+    IsSpiralOk({ row, column }) {
         const ind = this.PosToInd({ row, col: column});
-        return this.#_Context.units[ind]?.state == BROKER_STATES.CELLS.STATUS.OK;
+        return this.#_Context.units[ind]?.status == BROKER_STATES.CELLS.STATUS.OK;
     }
 
     Init() {
@@ -228,12 +229,12 @@ class ClassSpiralSectionStorage {
             let index = this.#_Context.currentOrder?.unitIndex ?? -1;
             if (index > -1) switch (currState) {
                 case ELECTR_CURR_STATE.SHORT:
-                    this.#_Context.units[index].state = BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT;
+                    this.#_Context.units[index].status = BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT;
                     this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.LIFT_SHORT_CIRCUIT, index, critical: true }));
                     break;
                 
                 case ELECTR_CURR_STATE.OVERLOAD:
-                    this.#_Context.units[index].state = BROKER_STATES.CELLS.STATUS.OVERLOAD;
+                    this.#_Context.units[index].status = BROKER_STATES.CELLS.STATUS.OVERLOAD;
                 default:
                     break;
             } 
@@ -255,16 +256,17 @@ class ClassSpiralSectionStorage {
             // await this.MotorOff(indexInUse);
             debugger
         }*/
+       const { row, col: column } = unitInUse.coords; 
+        this.#_Events.emit('dispense', { row, column, quantity: 1 });
         this.#_FSM.Dispatch(this.EVENTS.DISPENSE_RESULT, unitInUse.coords);
         this.UpdateStorageContext({ index: indexInUse }, { dispensed: 1 });
         const { itemsDispensed, itemsRequested } = this.#_Context.currentOrder;
         // if (itemsDispensed > itemsRequested) TODO: log error
-        console.log({ itemsDispensed, itemsRequested });
         if (itemsDispensed >= itemsRequested) {
             this.#_Context.timer.clear();
             console.log(`[STORAGE] Сброс таймера (1)`);
             this.#_Polling = false;
-            this.#_FSM.Dispatch(this.EVENTS.COMPLETED, { index: unitInUse.index, itemsDispensed, itemsRequested });
+            this.#_FSM.Dispatch(this.EVENTS.COMPLETED, { index: indexInUse, itemsDispensed, itemsRequested });
         } else {
             this.#_Context.timer.reset();
             console.log(`[STORAGE] Ресет таймера`);
@@ -275,12 +277,10 @@ class ClassSpiralSectionStorage {
      * @param {TypeCoords} param0 
      */
     async OnTimeout({ index }) {
-        console.log(`[Storage] Таймаут выдачи`);
-        this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.TAMPER_ERROR });
-        this.#_FSM.Dispatch(this.EVENTS.DISPENSE_RESULT, unitInUse.coords);
+        console.log(`[Storage] Таймаут выдачи: ${index}`);
+
+        this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.TAMPER_ERROR });
         this.#_Polling = false;
-        // await this.MotorOff(index);
-        // TODO: сработал тампер который не должен был работать -> вероятно пробой
         this.#_Context.timer.clear();
         console.log(`[STORAGE] Сброс таймера (2)`);
         this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.TAMPER_ERROR, index, critical: false }));
@@ -291,17 +291,27 @@ class ClassSpiralSectionStorage {
         this.Idle();
     }
     
+    /**
+     * @param {StorageFault} fault 
+     */
     async OnFault(fault) {
         try {
             await this.MotorOff({ force: true });
             this.UpdateStatus(fault);
-            this.#_Context.currentTask?.rej?.(fault);
-            this.#_Context.currentTask = null;
+            if (this.#_Context.currentOrder) {
+                const { unitIndex } = this.#_Context.currentOrder;
+                const { row, col: column } =  this.#_Context.units[unitIndex].coords; 
+                this.#_Events.emit('fail', { row, column, quantity: 0 }, fault);
+            }
+
             this.#_FSM.Dispatch(this.EVENTS.RECOVERED);
 
         } catch (innerFault) {
             console.log(`[STORAGE] Inner fault: ${innerFault}`);
             this.EmergencyOff();
+        } finally {
+            this.#_Context.currentTask?.rej?.(fault);
+            this.#_Context.currentTask = null;
         }
     }
 
@@ -327,12 +337,6 @@ class ClassSpiralSectionStorage {
     }
 
     /**
-     * @typedef {object} TypeDispenseRes
-     * @property {boolean} ok
-     * @property {string|undefined} reason
-     */
-
-    /**
      * 
      * @param {import("./srvSpiralSection").TypeTransactionCell} order
      * 
@@ -342,14 +346,14 @@ class ClassSpiralSectionStorage {
         return new Promise((res, rej) => {    
             const index = this.PosToInd({ row: order.row, col: order.column });    
             if (index > this.#_Context.units.length || (order.quantity < 1))
-                return rej(new Error('Невалидные параметры'));
+                return rej(new Error('[Storage] Невалидные параметры'));
 
             let state = this.CheckCurrent(); 
             if (state != ELECTR_CURR_STATE.IDLE) 
                 return rej(new Error(''));
             
             if (this.#_Context.currentTask) {
-                return rej(new Error('Выполняется предыдущая операция'));
+                return rej(new Error('[Storage] Выполняется предыдущая операция'));
             }
             this.#_Context.currentTask = { res, rej };
 
@@ -402,19 +406,20 @@ class ClassSpiralSectionStorage {
     /**
      * 
      * @param {object} param0
-     * @param {number} param0.index - номер ячейки/спирали 
      * @param {number} param0.dispensed 
+     * @param {string} param0.scope 
+     * @param {string} param0.status 
      */
-    UpdateStorageContext({ index }, { dispensed=0, scope, state }) {
-        if (this.#_Context.currentOrder.unitIndex)
+    UpdateStorageContext({ index }, { dispensed=0, scope, status }) {
+        if (this.#_Context.currentOrder)
             this.#_Context.currentOrder.itemsDispensed++;
 
         const unit = this.#_Context.units[index];
         unit.itemsDispensed += dispensed;
 
-        if (state) {
+        if (status) {
             if (scope == 'single') {
-                this.#_Context.units[index].state = state;
+                this.#_Context.units[index].status = status;
             } else {
                 let { coords: { col, row } } = this.#_Context.units[index];
                 
@@ -423,7 +428,7 @@ class ClassSpiralSectionStorage {
                         scope == 'col' && unit.coords.col == col || 
                         scope == 'row' && unit.coords.row == row
                     )
-                    unit.state = state;
+                    unit.status = status;
                 }
             }
         }
@@ -545,8 +550,8 @@ class ClassSpiralSectionStorage {
      * @param {number} index The linear index (0-based).
      * @returns {{row: number, column: number}} An object containing the row and column.
      */
-    IndexToPos(index) {
-        let width = this.#_Context.cols;
+    IndexToPos(index, _width) {
+        let width = _width ?? this.#_Context.cols;
         return { row: Math.floor(index / width), col: index % width };
     }
 
@@ -573,38 +578,36 @@ class ClassSpiralSectionStorage {
 
         switch (fault.code) {
             case FAULTS.TAMPER_ERROR:
-                this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.TAMPER_ERROR });
+                this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.TAMPER_ERROR });
                 break;
 
             case FAULTS.ACTUATOR_NO_POWER:
-                this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.ACTUATOR_NO_POWER });
+                this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.ACTUATOR_NO_POWER });
                 break;
 
             case FAULTS.IO_DRIVER_ERR:
-                this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
+                this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.BLOCKED });
                 break;
             
             case FAULTS.ACTUATOR_SHORT_CIRCUIT:
-                this.UpdateStorageContext({ index }, { scope: 'row', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
-                this.UpdateStorageContext({ index }, { scope: 'single', state: BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT });
+                this.UpdateStorageContext({ index }, { scope: 'row', status: BROKER_STATES.CELLS.STATUS.BLOCKED });
+                this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT });
                 break;
 
             case FAULTS.IO_PORT_ERR:
             case FAULTS.IO_TIMEOUT:
-                this.UpdateStorageContext({ index }, { scope: 'all', state: BROKER_STATES.CELLS.STATUS.BLOCKED });
+                this.UpdateStorageContext({ index }, { scope: 'all', status: BROKER_STATES.CELLS.STATUS.BLOCKED });
                 break;
         }
     }
 
     Reset() {
         this.#_FSM.Reset();
-        this.#_Context.currentTask?.rej?.(new Error('Reset'));
-        this.#_Context.currentTask = null;
         this.#_Context.currentOrder = null;
         this.#_Context.timer?.clear();
         this.#_Context.units = this.#_Context.units.map(u => ({                
             itemsDispensed: 0,
-            state: BROKER_STATES.CELLS.STATUS.OK,
+            status: BROKER_STATES.CELLS.STATUS.OK,
             ...u
         }));  
     }
