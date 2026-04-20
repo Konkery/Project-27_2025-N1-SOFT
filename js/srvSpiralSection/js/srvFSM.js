@@ -1,5 +1,3 @@
-const { default: EventEmitter2 } = require("eventemitter2");
-const assert = require('assert');
 /**
  * @typedef {Object} TypeStateActions
  * @property {string} state
@@ -7,32 +5,22 @@ const assert = require('assert');
  */
 
 /**
- * @typedef {Object.<string, TypeStateActions?} TypeStatesGraph
+ * @typedef {Object.<string, Object.<string, TypeStateActions>>} TypeStatesGraph
  */
 
-/**
- * @class
- * @description Реализует конечный автомат
- */
 class ClassFSM {
-    /** @type {TypeStatesGraph}*/
     _StateGraph;
-    /** @type {string} */
     #_PrevState;
-    /** @type {string} */
     _State;
-    /** @type {number} */
     #_StateChangeTimestamp;
-    /** @type {[TypeStateActions]} */
     #_Queue = [];
     #_Running = false;
     #_Processing = false;
+    
+    // Храним ссылки на обработчики для корректной отписки
+    #_BoundListeners = new Map();
+    #_EE = null;
 
-    /**
-     * @constructor
-     * @param {object} param0
-     * @param {TypeStatesGraph} param0.stateGraph
-     */
     constructor({ stateGraph, defaultState, onStateChanged }) {
         this._StateGraph = stateGraph;
         this._State = defaultState;
@@ -40,114 +28,93 @@ class ClassFSM {
         this.OnStateChanged = onStateChanged;
     }
 
-    /**
-     * @getter
-     * @returns {string}
-     */
-    get PrevState() {
-        return this.#_PrevState;
-    }
+    get PrevState() { return this.#_PrevState; }
+    get State() { return this._State; }
+    get StateChangeTimestamp() { return this.#_StateChangeTimestamp; }
 
-    /**
-     * @getter
-     * @returns {string} 
-     */
-    get State() {
-        return this._State;
-    }
-    /**
-     * @getter
-     * @returns {number}
-     */
-    get StateChangeTimestamp() {
-        return this.#_StateChangeTimestamp;
-    }
-
-    /**
-     * @method
-     * @param {EventEmitter2} ee 
-     * @param {[string]} events 
-     */
     Run(ee, events) {
         if (this.#_Running) return true;
+        
+        this.#_Running = true;
+        this.#_EE = ee;
 
-        const self = this;
-        const onEvent = function (...args) {
-            const { event } = this;
-            assert.strictEqual(typeof event, 'string');
-            let graph = {...self._StateGraph}
-            let st = self.State
-            if (!(self._StateGraph[self.State][event])) return; // nothing happens
-
-            const { state, action } = self._StateGraph[self.State][event];
-            const actionBind = () => action(...args);
-            if (typeof state == 'string' && typeof action == 'function')
-                self.#ChangeState({ state, action: actionBind });
-        };
-
-        for (const event of events) {
-            ee.on(event, onEvent);
-        }
-
-        this.End = () => {
-            const defaultEnd = this.End;
-            for (const event of events) {
-                ee.removeListener(event, onEvent);
-            }
-            this.End = defaultEnd;
-            return true;
+        for (const eventName of events) {
+            const listener = (...args) => this._HandleEvent(eventName, args);
+            this.#_BoundListeners.set(eventName, listener);
+            ee.on(eventName, listener);
         }
 
         return true;
     }
 
     End() {
-        return false;
-    }
-    /**
-     * 
-     * @param {TypeStateActions}} param0 
-     * @param {[any]} argsArr 
-     */
-    async #ChangeState({ state, action }) {
-        this.#_Queue.push({ state, action });
-        await this.#Process();
+        if (!this.#_Running || !this.#_EE) return false;
+
+        for (const [eventName, listener] of this.#_BoundListeners.entries()) {
+            this.#_EE.removeListener(eventName, listener);
+        }
+        
+        this.#_BoundListeners.clear();
+        this.#_EE = null;
+        this.#_Running = false;
+        
+        return true;
     }
 
-    async #Process() {
+    Dispatch(eventName, ...args) {
+        this._HandleEvent(eventName, args);
+    }
+
+
+    _HandleEvent(eventName, args) {
+        const currentStateGraph = this._StateGraph[this._State];
+        if (!currentStateGraph || !currentStateGraph[eventName]) return; // Игнорируем невалидные события
+
+        const { state, action } = currentStateGraph[eventName];
+        
+        if (typeof state === 'string') {
+            this.#ChangeState({ 
+                state, 
+                action: typeof action === 'function' ? () => action(...args) : () => {} 
+            });
+        }
+    }
+
+    // Убрали async/await. Смена состояния происходит строго синхронно.
+    #ChangeState({ state, action }) {
+        this.#_Queue.push({ state, action });
+        this.#Process(); 
+    }
+
+    #Process() {
         if (this.#_Processing) return;
         this.#_Processing = true;
 
-        while (this.#_Queue.length) {
+        while (this.#_Queue.length > 0) {
             const { state, action } = this.#_Queue.shift();
+            
             this.#_PrevState = this._State;
             this._State = state;
-            this.#_StateChangeTimestamp = new Date().getTime();
-            action();
-            if (typeof this.OnStateChanged == 'function')
-                this.OnStateChanged({ state, prevState: this.PrevState });
+            this.#_StateChangeTimestamp = Date.now();
 
-            // TODO: maybe need to handle async funcs in specific way
-            // action?.constructor?.name == 'Function' ? action()
-            //     : action?.constructor?.name == 'AsyncFunction' ? await action() : undefined;
+            if (typeof this.OnStateChanged === 'function') {
+                this.OnStateChanged({ state, prevState: this.#_PrevState });
+            }
+
+            try {
+                action();
+            } catch (err) {
+                console.error(`[FSM] Ошибка выполнения action при переходе в ${state}:`, err);
+            }
         }
 
         this.#_Processing = false;
     }
-    
-    СreateStateChangeChecker() {
-        let { State: savedState, StateChangeTimestamp: savedTime } = this;
-        return () => {
-            return this.State == savedState || this.StateChangeTimestamp != savedTime;
-        }
-    }
-
-    OnStateChanged() {
-
-    }
 
     Reset() {
         this._State = this._DefaultState;
+        this.#_Queue = [];
+        this.#_Processing = false;
     }
 }
 
