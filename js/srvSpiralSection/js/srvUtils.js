@@ -63,7 +63,7 @@ const CreateTimer = (cb, timeoutMs) => {
     return api;
 };
 
-class Fault {
+class ClassFault {
     constructor({ code, critical }) {
         this.code = code;
         this.critical = critical;
@@ -155,4 +155,4 @@ class BitMask {
     }
 }
 
-module.exports = { createTimer: CreateTimer, ClassFault: Fault, isWithinTolerance, BitMask };
+module.exports = { createTimer: CreateTimer, ClassFault, isWithinTolerance, BitMask };
