@@ -51,7 +51,6 @@ class ClassProxySection /*extends EventEmitter*/ {
      * @param {import("./HiLvlMessages").Response} param0.Response 
      */
     ProcessResponse({ Response }) {
-        debugger;
         let section = this.GetSectionByTarget(Response.Target);
         if (section)
             return { topic: 'Machine/Response', payload: Response };
@@ -83,6 +82,34 @@ class ClassProxySection /*extends EventEmitter*/ {
         // let ID = v4();
         if (command.Command == 'getItem') {
             return { ID: id, ...command };
+        }
+    }
+
+    /**
+     * 
+     * @param {object} param0 
+     * @returns 
+     */
+    ProcessHID(param0) {
+        const { type, barcode, device } = param0 ?? {};
+        if (!['qr', 'rfid'].includes(type.toLowerCase?.())) return;
+        return { 
+            topic: `/Machine/${type.toUpperCase()}`,
+            payload: {
+                Transaction: {
+                    ID: crypto.randomUUID(),					
+                    Timestamp: new Date().getTime(),
+                    User: {	},						
+                    Source: `Lo-level - ${type.toUpperCase()}`,        
+                    Target: {								
+                        id: '',							 // идентификатор аппарата
+                        name: 'Hi-level',				 // имя объекта назначения
+                        type: 'Hi-level control',	
+                        article: '12qw-5577-a7f8'			
+                    },
+                    Order: { barcode }	
+                }
+            }
         }
     }
 
