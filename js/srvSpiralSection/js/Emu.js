@@ -453,7 +453,7 @@ class Lift {
     constructor({ events, hbridgeKeys, log }) {
         this.events = events;
         this.values = {
-            liftBottomTamper: LIFT_CONSTANTS.TAMPER_OFF,
+            liftBottomTamper: LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_OFF,
             liftLevelSensor: LIFT_CONSTANTS.LIFT_LEVEL_ON,
             current: peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.IDLE),
             short: 0
@@ -496,7 +496,7 @@ class Lift {
         this.direction = 0;        // -1 вниз, +1 вверх
         this.lastLevelEventTime = 0;
         this.hbridgeSwState = { s1: 0, s3: 0, s2: 0, s4: 0 };
-        this.values.liftBottomTamper = LIFT_CONSTANTS.TAMPER_OFF;
+        this.values.liftBottomTamper = LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_OFF;
         this.values.liftLevelSensor = LIFT_CONSTANTS.LIFT_LEVEL_OFF;
         this.values.current = peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.IDLE);
         this.faults.clearAllFaults();
@@ -605,7 +605,7 @@ class Lift {
             this.movingInterval = setInterval(() => {
                 if (!this.setOnLevel && this.moving) {
                     this.emitLiftLevel(LIFT_CONSTANTS.LIFT_LEVEL_OFF);
-                    this.emitBottomTamper(LIFT_CONSTANTS.TAMPER_OFF);
+                    this.emitBottomTamper(LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_OFF);
                 }
             }, 50);
             this.events.emit(EVENTS.MOVE, { direction: this.direction });
@@ -621,7 +621,7 @@ class Lift {
         if (this.currentLevel === -1) {
             if (this.faults.hasFault(FAULTS.BOTTOM_TAMPER_FAIL)) 
                 return;
-            this.emitBottomTamper(LIFT_CONSTANTS.TAMPER_ON);
+            this.emitBottomTamper(LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_ON);
             await sleep(50);
             return;
         }
@@ -673,7 +673,7 @@ class Lift {
         // this.log(`[EMU] Сигнал нижнего тампера - ${val}`);
         if (!this.faults.hasFault(FAULTS.BOTTOM_TAMPER_FAIL)) {
             this.values.liftBottomTamper = val;
-            if (val == LIFT_CONSTANTS.TAMPER_ON)
+            if (val == LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_ON)
                 this.events.emit(EVENTS.BOTTOM_TAMPER, { value: val });
         }
     }

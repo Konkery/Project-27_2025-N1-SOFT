@@ -88,7 +88,8 @@ let sleep = require('timers/promises').setTimeout;
  * @property {[TypeUnit]} units
  * @property {string} state
  * @property {number} stateChangeTimestamp
- * @property {import("./srvUtils").TypeTimer} timer
+ * @property {import("./srvUtils").TypeTimer} dispenseTimer
+ * @property {import("./srvUtils").TypeTimer} fallbackTimer
  */
 
 /**
@@ -263,12 +264,12 @@ class ClassSpiralSectionStorage {
         const { itemsDispensed, itemsRequested } = this.#_Context.currentOrder;
         // if (itemsDispensed > itemsRequested) TODO: log error
         if (itemsDispensed >= itemsRequested) {
-            this.#_Context.timer.clear();
+            this.#_Context.dispenseTimer?.clear();
             console.log(`[STORAGE] Сброс таймера (1)`);
             this.#_Polling = false;
             this.#_FSM.Dispatch(this.EVENTS.COMPLETED, { index: indexInUse, itemsDispensed, itemsRequested });
         } else {
-            this.#_Context.timer.reset();
+            this.#_Context.dispenseTimer?.reset();
             console.log(`[STORAGE] Ресет таймера`);
         }
     }
@@ -281,7 +282,7 @@ class ClassSpiralSectionStorage {
 
         this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.TAMPER_ERROR });
         this.#_Polling = false;
-        this.#_Context.timer.clear();
+        this.#_Context.dispenseTimer?.clear();
         console.log(`[STORAGE] Сброс таймера (2)`);
         this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.TAMPER_ERROR, index, critical: false }));
     }
@@ -310,6 +311,8 @@ class ClassSpiralSectionStorage {
             console.log(`[STORAGE] Inner fault: ${innerFault}`);
             this.EmergencyOff();
         } finally {
+            this.#_Context.fallbackTimer?.clear();
+            this.#_Context.dispenseTimer?.clear();
             this.#_Context.currentTask?.rej?.(fault);
             this.#_Context.currentTask = null;
         }
@@ -317,7 +320,8 @@ class ClassSpiralSectionStorage {
 
     async Idle(/*{ index }*/) {
         // debugger;
-        this.#_Context.timer?.clear();
+        this.#_Context.fallbackTimer?.clear();
+        this.#_Context.dispenseTimer?.clear();
         const index = this.#_Context.currentOrder.unitIndex;
         console.log(`[STORAGE] Idle({ index: ${index} })`);
         try {
@@ -325,7 +329,7 @@ class ClassSpiralSectionStorage {
             this.#_Context.currentTask?.res?.();
             this.#_Context.currentTask = null;
             this.#_Context.currentOrder = null;
-            this.#_Context.timer = null;
+            this.#_Context.dispenseTimer = null;
 
         } catch (fault) {
             this.EmergencyOff();
@@ -356,6 +360,10 @@ class ClassSpiralSectionStorage {
                 return rej(new Error('[Storage] Выполняется предыдущая операция'));
             }
             this.#_Context.currentTask = { res, rej };
+            const MAX_TIME = order.quantity * STORAGE_CONSTANSTS.FULL_ROTATION_TIMEOUT;
+            this.#_Context.fallbackTimer = createTimer(
+                () => this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.NONE })), 
+                MAX_TIME).set();
 
             this.#_FSM.Dispatch(this.EVENTS.DISPENSE_COMMAND, order);
         });
@@ -375,7 +383,7 @@ class ClassSpiralSectionStorage {
         };
 
         const onTimeout = (() => this.#_FSM.Dispatch(this.EVENTS.ROTATE_TIMEOUT, { index })).bind(this);
-        this.#_Context.timer = createTimer(onTimeout, FULL_ROTATION_TIMEOUT).set();
+        this.#_Context.dispenseTimer = createTimer(onTimeout, FULL_ROTATION_TIMEOUT).set();
         
         try {
             await this.MotorOnPhased(index);
@@ -575,6 +583,7 @@ class ClassSpiralSectionStorage {
     UpdateStatus(fault) {
         if (!(fault instanceof StorageFault)) return;
         const { index } = fault;
+        if (typeof index != 'number') return;
 
         switch (fault.code) {
             case FAULTS.TAMPER_ERROR:
@@ -604,7 +613,8 @@ class ClassSpiralSectionStorage {
     Reset() {
         this.#_FSM.Reset();
         this.#_Context.currentOrder = null;
-        this.#_Context.timer?.clear();
+        this.#_Context.fallbackTimer?.reset();
+        this.#_Context.dispenseTimer?.clear();
         this.#_Context.units = this.#_Context.units.map(u => ({                
             itemsDispensed: 0,
             status: BROKER_STATES.CELLS.STATUS.OK,

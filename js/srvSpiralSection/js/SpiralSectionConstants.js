@@ -39,13 +39,11 @@ const STORAGE_CONSTANSTS = {
     }
 }
 const LIFT_CONSTANTS = {
-    TAMPER_ON: parseValue(process.env.LIFT_TAMPER_ON),
-    TAMPER_OFF: parseValue(process.env.LIFT_TAMPER_OFF),
-
     LIFT_LEVEL_ON: parseValue(process.env.LIFT_LEVEL_ON),
     LIFT_LEVEL_OFF: parseValue(process.env.LIFT_LEVEL_OFF),
 
     LIFT_BOTTOM_TAMPER_ON: parseValue(process.env.LIFT_BOTTOM_TAMPER_ON),
+    LIFT_BOTTOM_TAMPER_OFF: parseValue(process.env.LIFT_BOTTOM_TAMPER_OFF),
     LIFT_BOTTOM_TAMPER_DEBOUNCE: parseValue(process.env.LIFT_BOTTOM_TAMPER_DEBOUNCE),
 
     DOUBLE_TRIGGER_WINDOW: parseValue(process.env.LIFT_DOUBLE_TRIGGER_WINDOW),

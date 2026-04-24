@@ -52,6 +52,7 @@ let sleep = require('timers/promises').setTimeout;
  * @property {string} status
  * @property {TypeTask} currentTask
  * @property {import("./srvUtils").TypeTimer} timer
+ * @property {import("./srvUtils").TypeTimer} fallbackTimer
  */
 
 const { LIFT_BOTTOM_TAMPER_ON, 
@@ -257,6 +258,10 @@ class ClassSpiralSectionLift {
                 return rej();
 
             this.#_Context.currentTask = { res, rej };
+            // const FALLBACK_TIMEOUT = 
+            /*this.#_Context.fallbackTimer = createTimer(
+                () => this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.NONE }),
+                LIFT_CONSTANTS.ELEVATE_NEXT_MAX_TIME * 10));*/
             this.#_FSM.Dispatch(this.EVENTS.ELEVATE_TO_BASE_COMMAND);
         });
     }
