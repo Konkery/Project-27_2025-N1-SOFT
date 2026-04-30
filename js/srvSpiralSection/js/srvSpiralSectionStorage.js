@@ -3,6 +3,8 @@ const { createTimer, isWithinTolerance, ClassFault } = require("./srvUtils");
 const { ClassFSM: FSM } = require("./srvFSM");
 const { STORAGE_CONSTANSTS, FAULTS } = require("./SpiralSectionConstants");
 const { STATES: BROKER_STATES } = require("./srvVendingMachineStates");
+const { STATUS } = BROKER_STATES.CELLS;
+const STATUS_EXCEPT = [STATUS.ACTUATOR_NO_POWER, STATUS.ACTUATOR_SHORT_CIRCUIT, STATUS.TAMPER_ERROR];
 
 const MOTOR_RES_MAX_TIME = 200;
 const MONITOR_INTERVAL = 1000;
@@ -22,6 +24,8 @@ let sleep = require('timers/promises').setTimeout;
  * @property {[string]} spiralTamperChannels
  * @property {string} current
  * @property {string} voltageChannel
+ * @property {string} short
+ * @property {string} powerOff
  */
 
 /**
@@ -105,7 +109,7 @@ let sleep = require('timers/promises').setTimeout;
  * @property {number} STUCK
  */
 
-const { ELECTR_CURR_STATE, TAMPER_ON, CURRENT_RANGE, FULL_ROTATION_TIMEOUT } = STORAGE_CONSTANSTS;
+const { ELECTR_CURR_STATE, TAMPER_ON, TAMPER_OFF, CURRENT_RANGE, FULL_ROTATION_TIMEOUT } = STORAGE_CONSTANSTS;
 
 const STATE = {
     IDLE: 'IDLE',
@@ -127,21 +131,24 @@ class ClassSpiralSectionStorage {
     #_Events = new EventEmitter2();
     #_StatesGraph = {
         [STATE.IDLE]: {
-            [this.EVENTS.DISPENSE_COMMAND]: { state: STATE.DISPENSING,     action: this._Dispense.bind(this) },
-            [this.EVENTS.FAULT]:            { state: STATE.FAULT,          action: this.OnFault.bind(this) },
+            [this.EVENTS.DISPENSE_COMMAND]: { state: STATE.DISPENSING, action: this._Dispense.bind(this) },
+            [this.EVENTS.FAULT]: { state: STATE.FAULT, action: this.OnFault.bind(this) },
         },
         [STATE.DISPENSING]: {
-            [this.EVENTS.DISPENSED_SINGLE]: { state: STATE.DISPENSING,     action: this.OnDispensedSingle.bind(this) },
-            [this.EVENTS.ROTATE_TIMEOUT]:   { state: STATE.DISPENSING,     action: this.OnTimeout.bind(this) },
-            [this.EVENTS.COMPLETED]:        { state: STATE.IDLE,           action: this.Idle.bind(this) },
-            [this.EVENTS.FAULT]:            { state: STATE.FAULT,          action: this.OnFault.bind(this) },
+            [this.EVENTS.DISPENSED_SINGLE]: { state: STATE.DISPENSING, action: this.OnDispensedSingle.bind(this) },
+            [this.EVENTS.ROTATE_TIMEOUT]: { state: STATE.DISPENSING, action: this.OnTimeout.bind(this) },
+            [this.EVENTS.COMPLETED]: { state: STATE.IDLE, action: this.Idle.bind(this) },
+            [this.EVENTS.FAULT]: { state: STATE.FAULT, action: this.OnFault.bind(this) },
         },
-        [STATE.FAULT]: { 
-            [this.EVENTS.RECOVERED]:       { state: STATE.IDLE, action: this.Idle.bind(this) }
+        [STATE.FAULT]: {
+            [this.EVENTS.RECOVERED]: { state: STATE.IDLE, action: this.Idle.bind(this) }
         }
     };
     #_FSM = new FSM({ stateGraph: this.#_StatesGraph, onStateChanged: this.OnStateChanged.bind(this), defaultState: ClassSpiralSectionStorage.STATE.IDLE });
     #_Polling = false;
+    #_CurrentWatch = null;
+    #_TamperPosWatch = null;
+    #_TamperHandlers = new Map();
     /**
      * @param {object} param0
      * @param {TypeProxyCh} param0.ProxyCh
@@ -156,7 +163,7 @@ class ClassSpiralSectionStorage {
             rows,
             cols,
             currentOrder: null,
-            units: Array(rows*cols).fill().map((_, i) => ({
+            units: Array(rows * cols).fill().map((_, i) => ({
                 coords: this.IndexToPos(i, cols),
                 tamperInd: Math.floor(i / cols),
                 itemsLoaded: 999,
@@ -177,10 +184,10 @@ class ClassSpiralSectionStorage {
         return ({
             DISPENSE_COMMAND: 'DISPENSE_COMMAND',
             DISPENSED_SINGLE: 'DISPENSED_SINGLE',
-            COMPLETED:        'DISPENSED',
-            ROTATE_TIMEOUT:   'ROTATE_TIMEOUT',
-            FAULT:            'ERROR',
-            RECOVERED:        'RECOVERED'
+            COMPLETED: 'DISPENSED',
+            ROTATE_TIMEOUT: 'ROTATE_TIMEOUT',
+            FAULT: 'ERROR',
+            RECOVERED: 'RECOVERED'
         });
     }
 
@@ -198,13 +205,39 @@ class ClassSpiralSectionStorage {
      * @returns 
      */
     IsSpiralOk({ row, column }) {
-        const ind = this.PosToInd({ row, col: column});
+        const ind = this.PosToInd({ row, col: column });
         return this.#_Context.units[ind]?.status == BROKER_STATES.CELLS.STATUS.OK;
+    }
+
+    *RowIterator(rowIndex) {
+        const { rows, cols, units } = this.#_Context;
+
+        if (rowIndex < 0 || rowIndex >= rows)
+            throw new RangeError('rowIndex out of bounds');
+
+        const start = rowIndex * cols;
+        const end = start + cols;
+
+        for (let i = start; i < end; i++) {
+            yield units[i];
+        }
+    }
+
+    *ColIterator(colIndex) {
+        const { rows, cols, units } = this.#_Context;
+
+        if (colIndex < 0 || colIndex >= cols)
+            throw new RangeError('colIndex out of bounds');
+
+        for (let row = 0; row < rows; row++) {
+            yield units[row * cols + colIndex];
+        }
     }
 
     Init() {
         this.InitEventHandlers();
-        // this.#_FSM.Run(this.#_Events, Object.values(this.EVENTS));
+        this.StartCurrentWatch();
+        // this.StartTamperWatch();
     }
 
     /**
@@ -214,31 +247,85 @@ class ClassSpiralSectionStorage {
         /** Tamper trigger handler */
         let cachedValues = Array.from({ length: this.#_Channels.spiralTamperChannels.length }).fill(undefined);
         for (let i = 0; i < this.#_Channels.spiralTamperChannels.length; i++) {
-            let tamperCh = this.#_Channels.spiralTamperChannels[i];
 
-            this.#_ProxyCh.Events.on(`${tamperCh}-value`, ({ Value }) => {
+            const handler = (({ Value }) => {
                 if (this.#_Polling && Value != cachedValues[i] && Value == TAMPER_ON) {
                     console.log(`[Storage] сигнал с тампера спирали`);
-                    this.#_FSM.Dispatch(this.EVENTS.DISPENSED_SINGLE, { tamperInd: i });   
+                    this.#_FSM.Dispatch(this.EVENTS.DISPENSED_SINGLE, { tamperInd: i });
                 }
                 cachedValues[i] = Value;
-            });
+            }).bind(this);
+            let eventName = `${this.#_Channels.spiralTamperChannels[i]}-value`;
+            this.#_TamperHandlers.set(eventName, handler);
+            this.#_ProxyCh.Events.on(eventName, handler);
         }
+    }
 
-        this.currentMonitorInterv = setInterval(() => {
-            let currState = this.CheckCurrent();
-            let index = this.#_Context.currentOrder?.unitIndex ?? -1;
-            if (index > -1) switch (currState) {
-                case ELECTR_CURR_STATE.SHORT:
-                    this.#_Context.units[index].status = BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT;
-                    this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.LIFT_SHORT_CIRCUIT, index, critical: true }));
-                    break;
-                
-                case ELECTR_CURR_STATE.OVERLOAD:
-                    this.#_Context.units[index].status = BROKER_STATES.CELLS.STATUS.OVERLOAD;
-                default:
-                    break;
-            } 
+    StartCurrentWatch() {
+        if (this.#_CurrentWatch) clearInterval(this.#_CurrentWatch);
+        let noPowerCount = 0;
+
+        this.#_CurrentWatch = setInterval(() => {
+            try {
+                let currState = this.CheckCurrent();
+                let index = this.#_Context.currentOrder?.unitIndex;
+                const dispensing = this.State == ClassSpiralSectionStorage.STATE.DISPENSING;
+                switch (currState) {
+                    case ELECTR_CURR_STATE.SHORT:
+                        this.#_Context.units[index].status = BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT;
+                        this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index, critical: true }));
+                        break;
+
+                    case ELECTR_CURR_STATE.OVERLOAD:
+                        console.log(`overload index ${index}`);
+                        // this.#_Context.units[index].status = BROKER_STATES.CELLS.STATUS.OVERLOAD;
+
+                    case ELECTR_CURR_STATE.IDLE:
+                        if (dispensing) {
+                            noPowerCount++
+                            let noPowerConfirmed = noPowerCount == 2; //TODO
+                            if (noPowerConfirmed) {
+                                this.#_Context.units[index].status = BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT;
+                                this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_NO_POWER, index, critical: true }));
+                                noPowerCount = 0;
+                                //todo maybe add debounce
+                            }
+                        }
+                        break;
+                    default:
+                        noPowerCount = 0;
+                        break;
+                }
+            } catch {
+
+            }
+        }, MONITOR_INTERVAL);
+    }
+
+    StartTamperWatch() {
+        if (this.#_TamperPosWatch) clearInterval(this.#_TamperPosWatch);
+        const blockedRows = new Set();
+        this.#_TamperPosWatch = setInterval(() => {
+            if (this.#_FSM.State == ClassSpiralSectionStorage.STATE.IDLE) {
+
+                const rowsTamperValues = this.#_Channels.spiralTamperChannels
+                    .map(chName => this.#_ProxyCh.GetValue(chName));
+
+                for (let i = 0; i < rowsTamperValues.length; i++) {
+                    const rowTamperOn = rowsTamperValues[i] == TAMPER_ON;
+                    if (rowTamperOn) {
+                        this.UpdateStorageContext({ index: i }, { scope: 'row', status: BROKER_STATES.CELLS.STATUS.BLOCKED_INVALID_START_POS, except: STATUS_EXCEPT });
+                        blockedRows.add(i);
+                    } else {
+                        if (blockedRows.has(i)) {
+                            for (let unit of this.RowIterator(i)) {
+                                if (unit.status == STATUS.BLOCKED_INVALID_START_POS) unit.status = STATUS.OK;
+                            }
+                            blockedRows.delete(i);
+                        }
+                    }
+                }
+            }
         }, MONITOR_INTERVAL);
     }
 
@@ -257,10 +344,10 @@ class ClassSpiralSectionStorage {
             // await this.MotorOff(indexInUse);
             debugger
         }*/
-       const { row, col: column } = unitInUse.coords; 
+        const { row, col: column } = unitInUse.coords;
         this.#_Events.emit('dispense', { row, column, quantity: 1 });
         this.#_FSM.Dispatch(this.EVENTS.DISPENSE_RESULT, unitInUse.coords);
-        this.UpdateStorageContext({ index: indexInUse }, { dispensed: 1 });
+        this.UpdateStorageContext({ index: indexInUse }, { dispensed: 1, scope: 'single' });
         const { itemsDispensed, itemsRequested } = this.#_Context.currentOrder;
         // if (itemsDispensed > itemsRequested) TODO: log error
         if (itemsDispensed >= itemsRequested) {
@@ -291,7 +378,7 @@ class ClassSpiralSectionStorage {
         // TODO log
         this.Idle();
     }
-    
+
     /**
      * @param {StorageFault} fault 
      */
@@ -301,7 +388,7 @@ class ClassSpiralSectionStorage {
             this.UpdateStatus(fault);
             if (this.#_Context.currentOrder) {
                 const { unitIndex } = this.#_Context.currentOrder;
-                const { row, col: column } =  this.#_Context.units[unitIndex].coords; 
+                const { row, col: column } = this.#_Context.units[unitIndex].coords;
                 this.#_Events.emit('fail', { row, column, quantity: 0 }, fault);
             }
 
@@ -347,22 +434,22 @@ class ClassSpiralSectionStorage {
      * @returns {Promise}
      */
     async Dispense(order) {
-        return new Promise((res, rej) => {    
-            const index = this.PosToInd({ row: order.row, col: order.column });    
+        return new Promise((res, rej) => {
+            const index = this.PosToInd({ row: order.row, col: order.column });
             if (index > this.#_Context.units.length || (order.quantity < 1))
                 return rej(new Error('[Storage] Невалидные параметры'));
 
-            let state = this.CheckCurrent(); 
-            if (state != ELECTR_CURR_STATE.IDLE) 
-                return rej(new Error(''));
-            
+            /*let state = this.CheckCurrent();
+            if (state != ELECTR_CURR_STATE.IDLE)
+                return rej(new Error(''));*/
+
             if (this.#_Context.currentTask) {
                 return rej(new Error('[Storage] Выполняется предыдущая операция'));
             }
             this.#_Context.currentTask = { res, rej };
-            const MAX_TIME = order.quantity * STORAGE_CONSTANSTS.FULL_ROTATION_TIMEOUT;
+            const MAX_TIME = order.quantity * STORAGE_CONSTANSTS.FULL_ROTATION_TIMEOUT * 1.5;
             this.#_Context.fallbackTimer = createTimer(
-                () => this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.NONE })), 
+                () => this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.NONE })),
                 MAX_TIME).set();
 
             this.#_FSM.Dispatch(this.EVENTS.DISPENSE_COMMAND, order);
@@ -384,7 +471,7 @@ class ClassSpiralSectionStorage {
 
         const onTimeout = (() => this.#_FSM.Dispatch(this.EVENTS.ROTATE_TIMEOUT, { index })).bind(this);
         this.#_Context.dispenseTimer = createTimer(onTimeout, FULL_ROTATION_TIMEOUT).set();
-        
+
         try {
             await this.MotorOnPhased(index);
             console.log(`[STORAGE] Включен мотор`);
@@ -392,7 +479,7 @@ class ClassSpiralSectionStorage {
         } catch (fault) {
             console.log(`[STORAGE] Ошибка при включении мотора: ${fault}`);
             this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
-        }   
+        }
     }
 
     /**
@@ -406,8 +493,36 @@ class ClassSpiralSectionStorage {
             return;
 
         for (let [levelName, [lowLim, highLim]] of Object.entries(CURRENT_RANGE)) {
-            if (currentAmp >= lowLim &&currentAmp < highLim)
+            if (currentAmp >= lowLim && currentAmp < highLim) {
+                console.log(`${currentAmp} => ${ELECTR_CURR_STATE[levelName]}`);
                 return ELECTR_CURR_STATE[levelName];
+            }
+        }
+    }
+
+    *UnitsByScope(index, scope) {
+        const { row, col } = this.#_Context.units[index].coords;
+
+        switch (scope) {
+
+            case 'single':
+                yield this.#_Context.units[index];
+                break;
+
+            case 'row':
+                yield* this.RowIterator(row);
+                break;
+
+            case 'col':
+                yield* this.ColIterator(col);
+                break;
+
+            case 'all':
+                yield* this.#_Context.units;
+                break;
+
+            default:
+                throw new Error('Invalid scope');
         }
     }
 
@@ -418,30 +533,21 @@ class ClassSpiralSectionStorage {
      * @param {string} param0.scope 
      * @param {string} param0.status 
      */
-    UpdateStorageContext({ index }, { dispensed=0, scope, status }) {
+    UpdateStorageContext({ index }, { dispensed = 0, scope='single', status, except = [] }) {
         if (this.#_Context.currentOrder)
-            this.#_Context.currentOrder.itemsDispensed++;
+            this.#_Context.currentOrder.itemsDispensed += dispensed;
 
-        const unit = this.#_Context.units[index];
-        unit.itemsDispensed += dispensed;
+        for (const unit of this.UnitsByScope(index, scope)) {
+            unit.itemsDispensed += dispensed;
 
-        if (status) {
-            if (scope == 'single') {
-                this.#_Context.units[index].status = status;
-            } else {
-                let { coords: { col, row } } = this.#_Context.units[index];
-                
-                for (let unit of Object.values(this.#_Context.units)) {
-                    if (scope == 'all' || 
-                        scope == 'col' && unit.coords.col == col || 
-                        scope == 'row' && unit.coords.row == row
-                    )
-                    unit.status = status;
-                }
+            if (status) {
+                if (!except.includes(this.#_Context.units[index].status))
+                unit.status = status;
             }
         }
     }
-    
+
+
     /**
      * 
      * @param {object} param0
@@ -463,26 +569,24 @@ class ClassSpiralSectionStorage {
      */
     async MotorOnPhased(index) {
         let step = 1;
-        let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        
+        // let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+
         await this.MotorStep('On', { index, step });
 
         await sleep(50);
 
-        let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        /*let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (!isWithinTolerance(current_0, current_1, 0.05)) {
             // console.log(`Motor [${index}] error: Source switch broken`);
             throw new StorageFault({ code: FAULTS.IO_PORT_ERR, index, critical: true });
-        }
+        }*/
         step = 2;
         await this.MotorStep('On', { index, step });
 
-        await sleep(50);
-
-        let current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        /*let current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (isWithinTolerance(current_1, current_2, 0.05)) {
             throw new StorageFault({ code: FAULTS.ACTUATOR_NO_POWER, index, critical: false });
-        }
+        }*/
     }
 
     /**
@@ -510,10 +614,11 @@ class ClassSpiralSectionStorage {
         const { index, step } = param1 ?? {};
         this.#_ProxyCh.SetValue(
             this.#_Channels.matrixCtrlChannel, {
-                target: index,
-                cmd,
-                args: [{ step } ]});
-        
+            target: index,
+            cmd,
+            args: [{ step }]
+        });
+
         let stepResponse = await this.#_ProxyCh.Events.waitFor(`${this.#_Channels.matrixCtrlChannel}-value`, {
             timeout: MOTOR_RES_MAX_TIME,
         }).catch(() => {
@@ -534,15 +639,16 @@ class ClassSpiralSectionStorage {
      */
     async MotorOffPhased(index) {
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        // let isIdle = current_0 < CURRENT_RANGE.WORK_OK[0]
         let step = 1;
         await this.MotorStep('Off', { index, step });
         await sleep(50);
 
         /*let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        if (isWithinTolerance(current_0, current_1, 0.05)) {
+        if (!isIdle && isWithinTolerance(current_0, current_1, 0.05)) {
             // console.log(`Motor [${index} error: Source switch broken`);
             // this.UpdateStorageContext({ index: this.#_Context.currentOrder.unitIndex }, { disable: 'row'})
-            throw new StorageFault({ code: FAULTS.LIFT_SHORT_CIRCUIT, index, critical: true });
+            throw new StorageFault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index, critical: true });
         }*/
 
         step = 2;
@@ -553,11 +659,11 @@ class ClassSpiralSectionStorage {
 
     }
 
-     /**
-     * Converts a linear index to row and column indices.
-     * @param {number} index The linear index (0-based).
-     * @returns {{row: number, column: number}} An object containing the row and column.
-     */
+    /**
+    * Converts a linear index to row and column indices.
+    * @param {number} index The linear index (0-based).
+    * @returns {{row: number, column: number}} An object containing the row and column.
+    */
     IndexToPos(index, _width) {
         let width = _width ?? this.#_Context.cols;
         return { row: Math.floor(index / width), col: index % width };
@@ -574,7 +680,7 @@ class ClassSpiralSectionStorage {
      */
     GetLevelByIndex(index) {
         return this.#_Context.rows - Math.floor(index / this.#_Context.cols);
-    } 
+    }
 
     /**
      * 
@@ -597,15 +703,15 @@ class ClassSpiralSectionStorage {
             case FAULTS.IO_DRIVER_ERR:
                 this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.BLOCKED });
                 break;
-            
+
             case FAULTS.ACTUATOR_SHORT_CIRCUIT:
-                this.UpdateStorageContext({ index }, { scope: 'row', status: BROKER_STATES.CELLS.STATUS.BLOCKED });
+                this.UpdateStorageContext({ index }, { scope: 'row', status: BROKER_STATES.CELLS.STATUS.BLOCKED, except: STATUS_EXCEPT });
                 this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT });
                 break;
 
             case FAULTS.IO_PORT_ERR:
             case FAULTS.IO_TIMEOUT:
-                this.UpdateStorageContext({ index }, { scope: 'all', status: BROKER_STATES.CELLS.STATUS.BLOCKED });
+                this.UpdateStorageContext({ index }, { scope: 'all', status: BROKER_STATES.CELLS.STATUS.BLOCKED, except: STATUS_EXCEPT });
                 break;
         }
     }
@@ -615,11 +721,22 @@ class ClassSpiralSectionStorage {
         this.#_Context.currentOrder = null;
         this.#_Context.fallbackTimer?.reset();
         this.#_Context.dispenseTimer?.clear();
-        this.#_Context.units = this.#_Context.units.map(u => ({                
+
+        if (this.#_TamperPosWatch) clearInterval(this.#_TamperPosWatch);
+        this.#_TamperPosWatch = null;
+
+        if (this.#_CurrentWatch) clearInterval(this.#_CurrentWatch);
+        this.#_CurrentWatch = null;
+
+        for (let [eventName, handler] of this.#_TamperHandlers) 
+            if (eventName && handler) this.#_ProxyCh.Events.off(eventName, handler);
+        this.#_TamperHandlers.clear();
+
+        this.#_Context.units = this.#_Context.units.map(u => ({
             itemsDispensed: 0,
             status: BROKER_STATES.CELLS.STATUS.OK,
             ...u
-        }));  
+        }));
     }
 }
 
