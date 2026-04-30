@@ -79,7 +79,7 @@ class ClassSpiralSection {
         UNLOADING:       'UNLOADING',
     };
 
-    #_Context = { 
+    _Context = { 
         order: null,
         currentTask: null
     };
@@ -94,7 +94,7 @@ class ClassSpiralSection {
     /** @type {ClassSpiralSectionStorage} */
     #_Storage = null;
     /** @type {TypeTransactionTarget} */
-    #_Target = null;
+    _Target = null;
 
     #_StatesGraph = {
         [ClassSpiralSection.STATE.IDLE]: {
@@ -125,11 +125,11 @@ class ClassSpiralSection {
         this.#_Channels = channels;
         this.#_Lift = new ClassSpiralSectionLift({ ProxyCh, channels: channels.liftChannels, advOpts: advOpts.liftOpts });
         this.#_Storage = new ClassSpiralSectionStorage({ ProxyCh, channels: channels.storageChannels, advOpts: advOpts.storageOpts });
-        this.#_Target = target;
+        this._Target = target;
         this.Init();
     }
 
-    get Target() { return this.#_Target; }
+    get Target() { return this._Target; }
 
     /**
      * @returns {TypeSpiralSectionEvents}
@@ -149,7 +149,10 @@ class ClassSpiralSection {
     }
 
     Init() {
-        this.#_Storage.Events.on('dispense', result => this.OnResult(result, false));
+        this._DispenseHandler = this.HandleDispense.bind(this);
+        this.#_Storage.Events.on('dispense', this._DispenseHandler);
+        this._ErrorHandler = this.HandleFail.bind(this);
+        this.#_Storage.Events.on('fail', this._ErrorHandler);
     }
 
     /**
@@ -159,7 +162,7 @@ class ClassSpiralSection {
     async PerformTransaction(transaction, param0) {
         const { mock } = param0 ?? {}; 
         const { ID, Cells } = transaction;
-        this.#_Context.order = { ID, Cells };
+        this._Context.order = { ID, Cells };
         return mock ? this.ExecuteMock(Cells) : this.Execute(Cells);
     }
 
@@ -171,14 +174,14 @@ class ClassSpiralSection {
      */
     OnResult(cell, errorMessage='') {
         debugger;
-        const { ID } = this.#_Context?.order ?? {};
+        const { ID } = this._Context?.order ?? {};
         if (ID) {
             this.RouteResult({
                 Response: {
                     ID: crypto.randomUUID(),
                     ParentID: ID,			        // идентификатор транзакции, на которую отвечаем
                     Timestamp: new Date().getTime(),
-                    Target: this.#_Target,
+                    Target: this._Target,
                     Cell: cell,
                     Result: errorMessage ? 'FAIL' : 'OK',           
                     Message: errorMessage ? errorMessage : 'Операция выполнена успешно'
@@ -198,13 +201,13 @@ class ClassSpiralSection {
      */
     async Execute(_orders) {
         return new Promise((res, rej) => {
-            if (this.#_Context.currentTask) 
+            if (this._Context.currentTask) 
                 return rej(new Error('Выполняется предыдущая операция'));
 
             if (this.#_FSM.State != ClassSpiralSection.STATE.IDLE) 
                 return rej(new Error('Секция не в состоянии покоя'));
 
-            this.#_Context.currentTask = { res, rej };
+            this._Context.currentTask = { res, rej };
             this.#_FSM.Dispatch(this.EVENTS.DISPENSE_START, _orders);
         });
     }
@@ -236,15 +239,15 @@ class ClassSpiralSection {
                 }
                 for (let order of orders.filter(o => this.#_Storage.MaxLevel - o.row == level)) {
                     await sleep(DELAY_BEFORE_DISPENSE);
-                    if (this.#_Storage.IsSpiralOk(order)) {
-                        console.log(`Order: ${JSON.stringify(order)}`);
-                        try {
-                            await this.#_Storage.Dispense(order);
-                            console.log(`[STORAGE] Выполнена выдача ${JSON.stringify(order)}`);
-                        } catch (e) {
-                            this.HandleErr(e, 'Не удалось выполнить выдачу ТМЦ');
-                        }
+                    // if (this.#_Storage.IsSpiralOk(order)) {
+                    console.log(`Order: ${JSON.stringify(order)}`);
+                    try {
+                        await this.#_Storage.Dispense(order);
+                        console.log(`[STORAGE] Выполнена выдача ${JSON.stringify(order)}`);
+                    } catch (e) {
+                        this.HandleErr(e, 'Не удалось выполнить выдачу ТМЦ');
                     }
+                    // }
                 }
             }
 
@@ -278,8 +281,8 @@ class ClassSpiralSection {
     Idle() {
         // this.#_Context.timer?.clear();
         try {
-            this.#_Context.currentTask?.res?.();
-            this.#_Context.currentTask = null;
+            this._Context.currentTask?.res?.();
+            this._Context.currentTask = null;
 
         } catch (fault) {
             // this.EmergencyOff();
@@ -296,9 +299,12 @@ class ClassSpiralSection {
         this.#_FSM.Reset();
         this.#_Lift.Reset();
         this.#_Storage.Reset();
-        this.#_Context.currentTask?.rej?.(new Error('Reset'));
-        this.#_Context.currentTask = null;
-        this.#_Context.order = null;
+        this._Context.currentTask?.rej?.(new Error('Reset'));
+        this._Context.currentTask = null;
+        this._Context.order = null;
+
+        this.#_Storage.Events.off('dispense', this._DispenseHandler);
+        this.#_Storage.Events.off('fail', this._ErrorHandler);
     }
 
     HandleErr(e, prefixMsg) {
@@ -306,9 +312,22 @@ class ClassSpiralSection {
             `${prefixMsg}: ${e.message}.`
             : (e instanceof ClassFault) ?
             `${prefixMsg}: ${FAULT_DESC_RU[e.code]}.`
-            : this.OnResult(null, `${prefixMsg}: ошибка не определена.`);
-        console.log(`[SPIRAL] ${errMsg}`);
+            :`${prefixMsg}: ошибка не определена.`;
+        console.log(`[SPIRAL] Error ${errMsg}`);
         this.OnResult(null, errMsg);
+    }
+
+    HandleFail(cell, fault) {
+        const prefixMsg = 'Ошибка при выдаче ТМЦ';
+        let errMsg = (fault instanceof ClassFault) ?
+            `${prefixMsg}: ${FAULT_DESC_RU[fault.code]}.`
+          : `${prefixMsg}: ошибка не определена.`;
+        console.log(`[SPIRAL] Fail ${errMsg}`);
+        this.OnResult(cell, errMsg);
+    }
+
+    HandleDispense(cell) {
+        return this.OnResult(cell);
     }
 
     /**
@@ -318,13 +337,13 @@ class ClassSpiralSection {
      */
     async ExecuteMock(_orders) {
         return new Promise((res, rej) => {
-            if (this.#_Context.currentTask) 
+            if (this._Context.currentTask) 
                 return rej(new Error('Выполняется предыдущая операция'));
 
             if (this.#_FSM.State != ClassSpiralSection.STATE.IDLE) 
                 return rej(new Error('Секция не в состоянии покоя'));
 
-            this.#_Context.currentTask = { res, rej };
+            this._Context.currentTask = { res, rej };
             this.#_FSM.Dispatch(this.EVENTS.DISPENSE_START_MOCK, _orders);
         });
     }
