@@ -28,6 +28,8 @@ const STORAGE_CONSTANSTS = {
     AVG_ROTATION_TIME: parseValue(process.env.STORAGE_AVG_ROTATION_TIME),
     FULL_ROTATION_TIMEOUT: parseValue(process.env.STORAGE_FULL_ROTATION_TIMEOUT),
 
+    MONITOR_INTERVAL: parseValue(process.env.MONITOR_INTERVAL),
+
     CURRENT_RANGE: parseRange(
         process.env.STORAGE_CURRENT_RANGE
     ),
@@ -35,7 +37,8 @@ const STORAGE_CONSTANSTS = {
     ELECTR_CURR_STATE: {
         IDLE: 'IDLE',
         WORK_OK: 'WORK_OK',
-        OVERLOAD: 'STUCK'
+        OVERLOAD: 'STUCK',
+        SHORT: 'SHORT'
     }
 }
 const LIFT_CONSTANTS = {
@@ -53,6 +56,7 @@ const LIFT_CONSTANTS = {
     ELEVATE_NEXT_MAX_TIME: parseValue(process.env.LIFT_ELEVATE_NEXT_MAX_TIME),
 
     MOTOR_RES_MAX_TIME: parseValue(process.env.LIFT_MOTOR_RES_MAX_TIME),
+    MONITOR_INTERVAL: parseValue(process.env.MONITOR_INTERVAL),
 
     CURRENT_RANGE: parseRange(
         process.env.LIFT_CURRENT_RANGE
@@ -91,6 +95,8 @@ const FAULTS = {
     IO_PORT_ERR: 15,
     IO_PORT_ERR_1: 16,
     IO_PORT_ERR_2: 17,
+
+    FALLBACK_TIMEOUT: 18
 };
 
 const CELL_CONSTANTS = {
@@ -135,7 +141,9 @@ const FAULT_DESC_RU = {
 
     13: "Ошибка драйвера ввода-вывода",
     14: "Таймаут обмена с устройством ввода-вывода",
-    15: "Ошибка порта ввода-вывода"
+    15: "Ошибка порта ввода-вывода",
+
+    18: "Выполнение команды прервано из за превышения ожидаемого таймаута"
 }
 
 module.exports = { STORAGE_CONSTANSTS, LIFT_CONSTANTS, CELL_CONSTANTS, FAULTS, FAULT_DESC_RU };
