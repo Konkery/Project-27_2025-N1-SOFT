@@ -94,7 +94,7 @@ class ClassProxySection /*extends EventEmitter*/ {
         const { type, barcode, device } = param0 ?? {};
         if (!['qr', 'rfid'].includes(type.toLowerCase?.())) return;
         return { 
-            topic: `/Machine/${type.toUpperCase()}`,
+            topic: `Machine/${type.toUpperCase()}`,
             payload: {
                 Transaction: {
                     ID: crypto.randomUUID(),					
