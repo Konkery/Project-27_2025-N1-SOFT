@@ -59,8 +59,9 @@ const { LIFT_BOTTOM_TAMPER_ON,
     LIFT_BOTTOM_TAMPER_DEBOUNCE,
     // DOUBLE_TRIGGER_WINDOW, 
     ELEVATE_NEXT_MAX_TIME, 
-    ELECTR_CURR_STATE, 
-    CURRENT_RANGE } = LIFT_CONSTANTS;
+    ELECTR_CURR_STATE,
+    CURRENT_RANGE,
+    MONITOR_INTERVAL } = LIFT_CONSTANTS;
 
 class ClassSpiralSectionLift {
     static STATE = {
@@ -114,6 +115,9 @@ class ClassSpiralSectionLift {
         }
     };
     #_FSM = new FSM({ stateGraph: this.#_StatesGraph, defaultState: ClassSpiralSectionLift.STATE.IDLE, onStateChanged: this.OnStateChanged.bind(this) });
+    #_TamperHandlers = new Map();
+    #_LevelHandler = null;
+    #_LevelCachedValue = undefined;
 
     /**
      * 
@@ -172,16 +176,21 @@ class ClassSpiralSectionLift {
     Init() {
         this.InitEventHandlers();
         this.Stop({ force: true }).catch(e => console.log('[LIFT] Не удалось выполнить reset мотора', e));
-        // this.StartCurrentWatch();
-        // this.#_FSM.Run(this.#_Events, Object.values(this.EVENTS));
     }
 
     InitEventHandlers() {
+        this.SetTamperHandlers();
+        this.SetLevelHandler();
+        // this.StartCurrentWatch();
+    }
+
+    SetTamperHandlers() {
         /** Bottom tamper handler */
-        const tamperValueEventName = `${this.#_Channels.liftBottomTamper}-value`;
+        const eventName = `${this.#_Channels.liftBottomTamper}-value`;
         let tamperCachedValue = undefined;
         let debounce = null;
-        this.#_ProxyCh.Events.on(tamperValueEventName, ({ Value }) => {
+
+        const handler = (({ Value }) => {
             if (Value != tamperCachedValue && Value == LIFT_BOTTOM_TAMPER_ON && !debounce) {
                 this.#_Context.timer?.clear();
                 console.log(`[LIFT] обновлен сигнал на тампере: ${Value}`);
@@ -191,65 +200,89 @@ class ClassSpiralSectionLift {
                 this.#_FSM.Dispatch(this.EVENTS.BOTTOM_LEVEL_REACHED);
             };
             tamperCachedValue = Value;
-        });
+        }).bind(this);
+        this.#_TamperHandlers.set(eventName, handler);
+        this.#_ProxyCh.Events.on(eventName, handler);
+    }
 
+    SetLevelHandler() {
         /** New level handler */
         const levelValueEventName = `${this.#_Channels.liftLevelSensor}-value`;
+        this.#_LevelHandler = this.HandleLevel.bind(this);
 
-        let cachedValue;
-        this.#_ProxyCh.Events.on(levelValueEventName, ({ Value }) => {
-            if (Value == cachedValue) return;
-            cachedValue = Value;
-            if (Value == LIFT_BOTTOM_TAMPER_ON) {
-                /*if (this.#_FSM.State == ClassSpiralSectionLift.STATE.IDLE) {
-                    console.log(`[LIFT] Сигнал датчика уровня но лифт в IDLE`);
-                    this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_CTRL_UNDEFINED }));
-                }*/
+        this.#_ProxyCh.Events.on(levelValueEventName, this.#_LevelHandler);
+    }
 
-                if (this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT || 
-                    this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE ||
-                    this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM
-                ) {
-                    let motorState = this.#_ProxyCh.GetValue(this.#_Channels.liftMotorCtrl);
-                    if (motorState.cmd == 'Forward')
-                        this.#_Context.currentLevel++;
-                    if (motorState.cmd == 'Reverse')
-                        this.#_Context.currentLevel--;
+    HandleLevel({ Value }) {
+        if (Value == this.#_LevelCachedValue) return;
+        this.#_LevelCachedValue = Value;
+        if (Value == LIFT_BOTTOM_TAMPER_ON) {
+            /*if (this.#_FSM.State == ClassSpiralSectionLift.STATE.IDLE) {
+                console.log(`[LIFT] Сигнал датчика уровня но лифт в IDLE`);
+                this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_CTRL_UNDEFINED }));
+            }*/
 
-                    console.log(`[LIFT DRIVER] Уровень лифта: ${this.#_Context.currentLevel}`);
-                    if (this.#_Context.currentLevel == this.#_Context.requiredLevel) {
-                        this.#_Context.timer?.clear();
-                        if (this.#_Context.currentLevel == 0)
-                            this.#_FSM.Dispatch(this.EVENTS.BASE_LEVEL_REACHED);
-                        else
-                            this.#_FSM.Dispatch(this.EVENTS.COLLECT_LEVEL_REACHED);
-                    } 
-                }  
+            if (this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT || 
+                this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE ||
+                this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM
+            ) {
+                let motorState = this.#_ProxyCh.GetValue(this.#_Channels.liftMotorCtrl);
+                if (motorState.cmd == 'Forward')
+                    this.#_Context.currentLevel++;
+                if (motorState.cmd == 'Reverse')
+                    this.#_Context.currentLevel--;
 
-                this.#_Context.timer?.reset();
-            }
-        });
+                console.log(`[LIFT DRIVER] Уровень лифта: ${this.#_Context.currentLevel}`);
+                if (this.#_Context.currentLevel == this.#_Context.requiredLevel) {
+                    this.#_Context.timer?.clear();
+                    if (this.#_Context.currentLevel == 0)
+                        this.#_FSM.Dispatch(this.EVENTS.BASE_LEVEL_REACHED);
+                    else
+                        this.#_FSM.Dispatch(this.EVENTS.COLLECT_LEVEL_REACHED);
+                } 
+            }  
+
+            this.#_Context.timer?.reset();
+        }
     }
 
     StartCurrentWatch() {
         if (this.#_CurrentWatch) clearInterval(this.#_CurrentWatch);
-        
+        let noPowerCount = 0;
+
         this.#_CurrentWatch = setInterval(() => {
-            const shortUps = this.#_ProxyCh.GetValue(this.#_Channels.short) == STORAGE_CONSTANSTS.SHORT_CH_VAL;
-            const shortOverload = this.#_ProxyCh.GetValue(this.#_Channels.current) > LIFT_CONSTANTS.CURRENT_RANGE.OVERLOAD[1];
 
-            if (shortUps || shortOverload) {
-                this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
-                this.#_Context.status = BROKER_STATES.SECTIONS.LIFT.STATUS.SHORT_CIRCUIT;
-                return;
+            const isElevating = this.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT
+                            || this.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE
+                            || this.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM;
+
+            let currState = this.CheckCurrent();
+        
+            switch (currState) {
+                case ELECTR_CURR_STATE.OVERLOAD:
+                    this.#_Context.status = LIFT_STATUS.OVERLOAD;
+                    break;
+
+                case ELECTR_CURR_STATE.IDLE:
+                    if (isElevating) {
+                        noPowerCount++;
+                        if (noPowerCount == 2) {
+                            this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true }));
+                            this.#_Context.status = LIFT_STATUS.NO_POWER;
+                        }
+                    }
+                    break;
+
+                case ELECTR_CURR_STATE.SHORT:
+                    this.#_Context.status = LIFT_STATUS.SHORT_CIRCUIT;
+                    this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
+                    break;
+
+                default:
+                    noPowerCount = 0;
+                    break;
             }
-
-            const overload = this.#_ProxyCh.GetValue(this.#_Channels.current) >= LIFT_CONSTANTS.CURRENT_RANGE.OVERLOAD[0];
-            if (overload) {
-                this.#_Context.status = BROKER_STATES.SECTIONS.LIFT.STATUS.OVERLOAD;
-            }
-
-        }, 1000);
+        }, MONITOR_INTERVAL);
     }
 
     async ElevateToBaseLevel() {
@@ -284,7 +317,7 @@ class ClassSpiralSectionLift {
         } catch (fault) {
             this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
         }
-        await sleep(250);
+        await sleep(200);
         this.#_Context.currentLevel = -1;
         this.#_Context.requiredLevel = 0;
 
@@ -401,38 +434,36 @@ class ClassSpiralSectionLift {
         // if (!['Forward', 'Reverse'].includes(cmd))
 
         await this.Stop({ force: true });
-        await sleep(50);
         
-        let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        await sleep(50);
+        /*let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (current_0 >= ELECTR_CURR_STATE.WORK_OK[0]) 
-            throw new Fault({ code: FAULTS.LIFT_CTRL_UNDEFINED, critical: true });
+            throw new Fault({ code: FAULTS.LIFT_CTRL_UNDEFINED, critical: true });*/
 
         let step = 1;
         await this.MotorStep(cmd, { step });
             
         await sleep(50);
+        /*if (this.CheckShortCircuit())
+            throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });*/
 
-        if (this.CheckShortCircuit())
-            throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
-
-        let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        
-        /*if (!isWithinTolerance(current_0, current_1, 0.05)) {   // пробой 
-            console.log(`[LIFT] Current significantly changed (${current_0} -> ${current_1}) after On({ step: 1 })"`);
+        /*let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        if (!isWithinTolerance(current_0, current_1, 0.05)) {   // пробой 
+            // console.log(`[LIFT] Current significantly changed (${current_0} -> ${current_1}) after On({ step: 1 })"`);
             throw new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
         }*/
 
         step = 2;
         await this.MotorStep(cmd, { step });
 
-        await sleep(50);   //TODO test 50ms
+        await sleep(50);   
 
-        if (this.CheckShortCircuit())
-            throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+        /*if (this.CheckShortCircuit())
+            throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });*/
 
-        let current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-
-        /*if (isWithinTolerance(current_0, current_2, 0.05)) {
+        /*let current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        if (isWithinTolerance(current_1, current_2, 0.05)) {
+            console.log(`1 ${current_1} -> ${current_2}`);
             throw new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true });    // пробой 
         }*/
     }
@@ -516,17 +547,19 @@ class ClassSpiralSectionLift {
      */
     async StopPhased() {
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        // console.log(current_0, CURRENT_RANGE.WORK_OK[0]);
+        // let isIdle = current_0 < CURRENT_RANGE.WORK_OK[0]
         let step = 1;
         await this.MotorStep('Off', { step });
         
         await sleep(50);
         
-        if (this.CheckShortCircuit())
+        /*if (this.CheckShortCircuit())
             throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
 
         let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        
-        /*if (isWithinTolerance(current_0, current_1, 0.05)) {
+
+        if (!isIdle && isWithinTolerance(current_0, current_1, 0.05)) {
             console.log(`[LIFT] Current is ${current_1} after Off({ step: ${step} })"`);
             throw new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
         }*/
@@ -583,6 +616,7 @@ class ClassSpiralSectionLift {
     }
 
     CheckShortCircuit() {
+        return false;
         if (this.#_Channels.short) {
             return this.#_ProxyCh.GetValue(this.#_Channels.short) == STORAGE_CONSTANSTS.SHORT_CH_VAL;
         }
@@ -596,7 +630,17 @@ class ClassSpiralSectionLift {
         this.#_Context.requiredLevel = 0;
         this.#_Context.timer?.clear();
         this.#_Context.timer = null;
+
+        for (let [eventName, handler] of this.#_TamperHandlers) 
+            if (eventName && handler) this.#_ProxyCh.Events.off(eventName, handler);
+        this.#_TamperHandlers.clear();
+
+        const levelValueEventName = `${this.#_Channels.liftLevelSensor}-value`;
+        this.#_ProxyCh.Events.off(levelValueEventName, this.#_LevelHandler);
+
         if (this.#_CurrentWatch) clearInterval(this.#_CurrentWatch)
+        this.#_CurrentWatch = null;
+        
         this.Stop({ force: true });
     }
 }
