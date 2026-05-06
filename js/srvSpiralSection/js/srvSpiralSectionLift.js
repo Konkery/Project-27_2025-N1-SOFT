@@ -16,6 +16,7 @@ let sleep = require('timers/promises').setTimeout;
  * @typedef {object} TypeSpiralSectionLiftChannels
  * @property {string} liftMotorCtrl
  * @property {[string]} liftBottomTamper
+ * @property {[string]} liftTopTamper
  * @property {string} liftLevelSensor
  * @property {string} current
  * @property {string} short
@@ -179,12 +180,13 @@ class ClassSpiralSectionLift {
     }
 
     InitEventHandlers() {
-        this.SetTamperHandlers();
+        this.SetBottomTamperHandler();
         this.SetLevelHandler();
+        this.SetTopTamperHandler();
         // this.StartCurrentWatch();
     }
 
-    SetTamperHandlers() {
+    SetBottomTamperHandler() {
         /** Bottom tamper handler */
         const eventName = `${this.#_Channels.liftBottomTamper}-value`;
         let tamperCachedValue = undefined;
@@ -193,11 +195,33 @@ class ClassSpiralSectionLift {
         const handler = (({ Value }) => {
             if (Value != tamperCachedValue && Value == LIFT_BOTTOM_TAMPER_ON && !debounce) {
                 this.#_Context.timer?.clear();
-                console.log(`[LIFT] обновлен сигнал на тампере: ${Value}`);
+                console.log(`[LIFT] обновлен сигнал на нижнем тампере: ${Value}`);
                 debounce = setTimeout(() => {
                     debounce = null;
                 }, LIFT_BOTTOM_TAMPER_DEBOUNCE);
                 this.#_FSM.Dispatch(this.EVENTS.BOTTOM_LEVEL_REACHED);
+            };
+            tamperCachedValue = Value;
+        }).bind(this);
+        this.#_TamperHandlers.set(eventName, handler);
+        this.#_ProxyCh.Events.on(eventName, handler);
+    }
+
+    SetTopTamperHandler() {
+        /** Bottom tamper handler */
+        const eventName = `${this.#_Channels.liftTopTamper}-value`;
+        let tamperCachedValue = undefined;
+        let debounce = null;
+
+        const handler = (({ Value }) => {
+            if (Value != tamperCachedValue && Value == LIFT_BOTTOM_TAMPER_ON && !debounce) {
+                this.#_Context.timer?.clear();
+                console.log(`[LIFT] обновлен сигнал на верхнем тампере: ${Value}`);
+                debounce = setTimeout(() => {
+                    debounce = null;
+                }, LIFT_BOTTOM_TAMPER_DEBOUNCE);
+                // this.#_FSM.Dispatch(this.EVENTS.BOTTOM_LEVEL_REACHED);
+                this.Stop().catch(fault => this.#_FSM.Dispatch(this.EVENTS.FAULT, fault));
             };
             tamperCachedValue = Value;
         }).bind(this);
@@ -274,6 +298,8 @@ class ClassSpiralSectionLift {
                     break;
 
                 case ELECTR_CURR_STATE.SHORT:
+                    console.log(`[LIFT] ${currState}`);
+                    console.log(`${this.#_ProxyCh.GetValue(this.#_Channels.current)}`);
                     this.#_Context.status = LIFT_STATUS.SHORT_CIRCUIT;
                     this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
                     break;
@@ -398,8 +424,9 @@ class ClassSpiralSectionLift {
 
     async _ElevateToBottom() {
         this.#_Context.requiredLevel = -1;
-        if (this.#_ProxyCh.GetValue(this.#_Channels.liftBottomTamper) == LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_ON)
-            this.#_FSM.Dispatch(this.EVENTS.BOTTOM_LEVEL_REACHED);
+        if (this.#_ProxyCh.GetValue(this.#_Channels.liftBottomTamper) == LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_ON) {
+            return this.#_FSM.Dispatch(this.EVENTS.BOTTOM_LEVEL_REACHED);
+        }
         try {
             await this.ElevateDown();
             console.log(`ElevateDown()`);
