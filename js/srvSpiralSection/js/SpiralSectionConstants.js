@@ -86,6 +86,7 @@ const FAULTS = {
     ACTUATOR_NO_POWER: 7,
     ACTUATOR_SHORT_CIRCUIT: 8,
     TAMPER_ERROR: 9,
+    TAMPER_BAD_POS: 19,
     ACTUATOR_OVERLOAD: 10,
     ACTUATOR_OVERLOAD_1: 11,
     ACTUATOR_OVERLOAD_2: 12,
@@ -124,26 +125,25 @@ const CELL_CONSTANTS = {
 }
 
 const FAULT_DESC_RU = {
-    0: "Нет ошибки",
+    [FAULTS.NONE]: "Нет ошибки",
+    [FAULTS.LIFT_SHORT_CIRCUIT]: "Короткое замыкание двигателя лифта",
+    [FAULTS.LIFT_NO_POWER]: "Отсутствует питание двигателя лифта",
+    [FAULTS.LIFT_OVERLOAD]: "Перегрузка двигателя лифта",
+    [FAULTS.LIFT_CTRL_UNDEFINED]: "Неопределённое состояние управления лифтом",
 
-    1: "Короткое замыкание двигателя лифта",
-    2: "Отсутствует питание двигателя лифта",
-    3: "Перегрузка двигателя лифта",
-    4: "Неопределённое состояние управления лифтом",
+    [FAULTS.LEVEL_SENSOR_FAIL]: "Отказ датчика уровня",
+    [FAULTS.BOTTOM_TAMPER_FAIL]: "Отказ нижнего тампера",
+    [FAULTS.TAMPER_BAD_POS]: "Одна из спиралей находится в некорректном начальном положении",
+    [FAULTS.ACTUATOR_NO_POWER]: "Отсутствует питание актуатора",
+    [FAULTS.ACTUATOR_SHORT_CIRCUIT]: "Короткое замыкание актуатора",
+    [FAULTS.TAMPER_ERROR]: "Ошибка сигнала тампера",
+    [FAULTS.ACTUATOR_OVERLOAD]: "Перегрузка актуатора",
 
-    5: "Отказ датчика уровня",
-    6: "Отказ нижнего тампера",
+    [FAULTS.IO_DRIVER_ERR]: "Ошибка драйвера ввода-вывода",
+    [FAULTS.IO_TIMEOUT]: "Таймаут обмена с устройством ввода-вывода",
+    [FAULTS.IO_PORT_ERR]: "Ошибка порта ввода-вывода",
 
-    7: "Отсутствует питание актуатора",
-    8: "Короткое замыкание актуатора",
-    9: "Ошибка сигнала тампера",
-    10: "Перегрузка актуатора",
-
-    13: "Ошибка драйвера ввода-вывода",
-    14: "Таймаут обмена с устройством ввода-вывода",
-    15: "Ошибка порта ввода-вывода",
-
-    18: "Выполнение команды прервано из за превышения ожидаемого таймаута"
+    [FAULTS.FALLBACK_TIMEOUT]: "Выполнение команды прервано из за превышения ожидаемого таймаута"
 }
 
 module.exports = { STORAGE_CONSTANSTS, LIFT_CONSTANTS, CELL_CONSTANTS, FAULTS, FAULT_DESC_RU };
