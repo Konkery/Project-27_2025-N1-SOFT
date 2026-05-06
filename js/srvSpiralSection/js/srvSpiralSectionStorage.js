@@ -170,7 +170,7 @@ class ClassSpiralSectionStorage {
                 itemsLeft: 999,
                 capacity: 999,
                 itemsDispensed: 0,
-                status: BROKER_STATES.CELLS.STATUS.OK
+                status: STATUS.OK
             }))
         };
         this.Init();
@@ -206,7 +206,7 @@ class ClassSpiralSectionStorage {
      */
     IsSpiralOk({ row, column }) {
         const ind = this.PosToInd({ row, col: column });
-        return this.#_Context.units[ind]?.status == BROKER_STATES.CELLS.STATUS.OK;
+        return this.#_Context.units[ind]?.status == STATUS.OK;
     }
 
     *RowIterator(rowIndex) {
@@ -272,24 +272,30 @@ class ClassSpiralSectionStorage {
                 const dispensing = this.State == ClassSpiralSectionStorage.STATE.DISPENSING;
                 switch (currState) {
                     case ELECTR_CURR_STATE.SHORT:
-                        this.#_Context.units[index].status = BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT;
-                        this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index, critical: true }));
+                        if (this.#_Context.units[index].status != STATUS.ACTUATOR_SHORT_CIRCUIT) {
+                            this.#_Context.units[index].status = STATUS.ACTUATOR_SHORT_CIRCUIT;
+                            this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index, critical: true }));
+                        }
                         break;
 
                     case ELECTR_CURR_STATE.OVERLOAD:
-                        console.log(`overload index ${index}`);
-                        // this.#_Context.units[index].status = BROKER_STATES.CELLS.STATUS.OVERLOAD;
+                        if (this.#_Context.units[index].status == STATUS.OK)
+                            this.#_Context.units[index].status = STATUS.OVERLOAD;
 
                     case ELECTR_CURR_STATE.IDLE:
                         if (dispensing) {
                             noPowerCount++
                             let noPowerConfirmed = noPowerCount == 2; //TODO
                             if (noPowerConfirmed) {
-                                this.#_Context.units[index].status = BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT;
+                                // if (short) {}
+                                this.#_Context.units[index].status = STATUS.ACTUATOR_NO_POWER;
                                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_NO_POWER, index, critical: true }));
                                 noPowerCount = 0;
                                 //todo maybe add debounce
                             }
+                        } else {
+                            if (this.#_Context.units[index].status == STATUS.OVERLOAD)
+                                this.#_Context.units[index].status = STATUS.OK;
                         }
                         break;
                     default:
@@ -314,7 +320,7 @@ class ClassSpiralSectionStorage {
                 for (let i = 0; i < rowsTamperValues.length; i++) {
                     const rowTamperOn = rowsTamperValues[i] == TAMPER_ON;
                     if (rowTamperOn) {
-                        this.UpdateStorageContext({ index: i }, { scope: 'row', status: BROKER_STATES.CELLS.STATUS.BLOCKED_INVALID_START_POS, except: STATUS_EXCEPT });
+                        this.UpdateStorageContext({ index: i }, { scope: 'row', status: STATUS.BLOCKED_INVALID_START_POS, except: STATUS_EXCEPT });
                         blockedRows.add(i);
                     } else {
                         if (blockedRows.has(i)) {
@@ -367,7 +373,6 @@ class ClassSpiralSectionStorage {
     async OnTimeout({ index }) {
         console.log(`[Storage] Таймаут выдачи: ${index}`);
 
-        this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.TAMPER_ERROR });
         this.#_Polling = false;
         this.#_Context.dispenseTimer?.clear();
         console.log(`[STORAGE] Сброс таймера (2)`);
@@ -574,6 +579,12 @@ class ClassSpiralSectionStorage {
         await this.MotorStep('On', { index, step });
 
         await sleep(50);
+        let { row } = this.IndexToPos(index);
+        let tamperValue = this.#_ProxyCh.GetValue(this.#_Channels.spiralTamperChannels[row]);
+        if (tamperValue !== TAMPER_ON) {
+            console.log(`[STORAGE] Ряд ${row} блокируется из за сигнала ${tamperValue} на тампере (строка ${row})`);
+            throw new StorageFault({ code: FAULTS.TAMPER_BAD_POS, index, critical: true });
+        }
 
         /*let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (!isWithinTolerance(current_0, current_1, 0.05)) {
@@ -693,25 +704,29 @@ class ClassSpiralSectionStorage {
 
         switch (fault.code) {
             case FAULTS.TAMPER_ERROR:
-                this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.TAMPER_ERROR });
+                this.UpdateStorageContext({ index }, { scope: 'single', status: STATUS.TAMPER_ERROR });
+                break;
+
+            case FAULTS.TAMPER_BAD_POS:
+                this.UpdateStorageContext({ index }, { scope: 'row', status: STATUS.BLOCKED, except: STATUS_EXCEPT });
                 break;
 
             case FAULTS.ACTUATOR_NO_POWER:
-                this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.ACTUATOR_NO_POWER });
+                this.UpdateStorageContext({ index }, { scope: 'single', status: STATUS.ACTUATOR_NO_POWER });
                 break;
 
             case FAULTS.IO_DRIVER_ERR:
-                this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.BLOCKED });
+                this.UpdateStorageContext({ index }, { scope: 'single', status: STATUS.BLOCKED });
                 break;
 
             case FAULTS.ACTUATOR_SHORT_CIRCUIT:
-                this.UpdateStorageContext({ index }, { scope: 'row', status: BROKER_STATES.CELLS.STATUS.BLOCKED, except: STATUS_EXCEPT });
-                this.UpdateStorageContext({ index }, { scope: 'single', status: BROKER_STATES.CELLS.STATUS.ACTUATOR_SHORT_CIRCUIT });
+                this.UpdateStorageContext({ index }, { scope: 'row', status: STATUS.BLOCKED, except: STATUS_EXCEPT });
+                this.UpdateStorageContext({ index }, { scope: 'single', status: STATUS.ACTUATOR_SHORT_CIRCUIT });
                 break;
 
             case FAULTS.IO_PORT_ERR:
             case FAULTS.IO_TIMEOUT:
-                this.UpdateStorageContext({ index }, { scope: 'all', status: BROKER_STATES.CELLS.STATUS.BLOCKED, except: STATUS_EXCEPT });
+                this.UpdateStorageContext({ index }, { scope: 'all', status: STATUS.BLOCKED, except: STATUS_EXCEPT });
                 break;
         }
     }
@@ -734,7 +749,7 @@ class ClassSpiralSectionStorage {
 
         this.#_Context.units = this.#_Context.units.map(u => ({
             itemsDispensed: 0,
-            status: BROKER_STATES.CELLS.STATUS.OK,
+            status: STATUS.OK,
             ...u
         }));
     }
