@@ -4,7 +4,7 @@ const { ClassSpiralSectionStorage } = require('./srvSpiralSectionStorage');
 const { ClassFSM: FSM } = require('./srvFSM');
 const { STATES: BROKER_STATES } = require("./srvVendingMachineStates");
 const { ClassFault } = require('./srvUtils');
-const { FAULT_DESC_RU } = require('./SpiralSectionConstants');
+const { FAULT_DESC_RU, BOX_CONSTANTS, FAULTS } = require('./SpiralSectionConstants');
 const { error } = require('console');
 const LIFT_STATUS = BROKER_STATES.SECTIONS.LIFT.STATUS;
 
@@ -126,6 +126,9 @@ class ClassSpiralSection {
         this.#_Lift = new ClassSpiralSectionLift({ ProxyCh, channels: channels.liftChannels, advOpts: advOpts.liftOpts });
         this.#_Storage = new ClassSpiralSectionStorage({ ProxyCh, channels: channels.storageChannels, advOpts: advOpts.storageOpts });
         this._Target = target;
+        this.lock = channels.lock;
+        this.optic = channels.optic;
+        this.door = channels.door;
         this.Init();
     }
 
@@ -146,6 +149,16 @@ class ClassSpiralSection {
     get Events() {
         // TODO: return proxy
         return this.#_Events;
+    }
+
+    IsDoorClosed() {
+        if (!this.door) return true;
+        return this.#_ProxyCh.GetValue(this.door) == 1;
+    }
+
+    IsBoxClosed() {
+        if (!this.optic) return true;
+        return this.#_ProxyCh.GetValue(this.optic) == 1;
     }
 
     Init() {
@@ -218,7 +231,11 @@ class ClassSpiralSection {
      * @returns {Promise}
      */
     async _Execute(_orders) {
+        this.CloseBox();
         try {
+            if (!this.IsDoorClosed())
+                return this.HandleErr(new ClassFault({ code: FAULTS.DOOR_OPENED }), 'Отказ в начале транзакции');
+            
             /** @type {[TypeTransactionCell]} */
             let orders = [..._orders];
             orders.sort((a, b) => a.row - b.row);   //сортировка по убыванию уровня
@@ -239,33 +256,46 @@ class ClassSpiralSection {
                 }
                 for (let order of orders.filter(o => this.#_Storage.MaxLevel - o.row == level)) {
                     await sleep(DELAY_BEFORE_DISPENSE);
-                    // if (this.#_Storage.IsSpiralOk(order)) {
-                    console.log(`Order: ${JSON.stringify(order)}`);
-                    try {
-                        await this.#_Storage.Dispense(order);
-                        console.log(`[STORAGE] Выполнена выдача ${JSON.stringify(order)}`);
-                    } catch (e) {
-                        this.HandleErr(e, 'Не удалось выполнить выдачу ТМЦ');
+                    if (this.#_Storage.IsSpiralOk(order)) {
+                        console.log(`Order: ${JSON.stringify(order)}`);
+                        try {
+                            await this.#_Storage.Dispense(order);
+                            console.log(`[STORAGE] Выполнена выдача ${JSON.stringify(order)}`);
+                        } catch (e) {
+                            this.HandleErr(e, 'Не удалось выполнить выдачу ТМЦ');
+                        }
+                    } else {
+                        console.log(`[STORAGE] Заказ ${JSON.stringify(order)} не будет выполнен в связи со статусом соответствующей ячейки`);
                     }
-                    // }
                 }
             }
-
+            
             if (this.#_Lift.State == ClassSpiralSectionLift.STATE.IDLE) {
                 let secondTry = false;
                 try {
                     console.log(`[LIFT] Для выдачи лифт спускается на 0-й уровень`);
                     await this.#_Lift.ElevateToBaseLevel();
-                    return;
+                    this.OpenBox();
+                    let t_sec = BOX_CONSTANTS.OPENED_TIME_SEC ?? 30;
+                    this.openedTimer = setTimeout(() => {
+                        this.CloseBox();
+                        // this.#_Events.emit(this.EVENTS.UNLOADING_DONE);
+                    }, t_sec*1000);
 
                 } catch (e) {
                     this.HandleErr(e, 'Ошибка при установке лифта в положение выдачи');
                     secondTry = true;
                 }
-                /*if (this.#_Lift.MotorOk) */
+                // /*if (this.#_Lift.MotorOk) 
                 if (secondTry) try {
                     console.log(`[LIFT] для выдачи лифт спускается на нижний уровень`);
                     await this.#_Lift.ElevateToBottom();
+                    this.OpenBox();
+                    let t_sec = BOX_CONSTANTS.OPENED_TIME_SEC ?? 30;
+                    this.openedTimer = setTimeout(() => {
+                        this.CloseBox();
+                        // this.#_Events.emit(this.EVENTS.UNLOADING_DONE);
+                    }, t_sec*1000);
                 
                 } catch (e) {
                     this.HandleErr(e, 'Ошибка при установке лифта в нижнее положение');
@@ -290,9 +320,19 @@ class ClassSpiralSection {
     }
 
     OpenBox() {
-        setTimeout(() => {
-            this.#_Events.emit(this.EVENTS.UNLOADING_DONE);
-        }, 100);
+        if (this.lock) {
+            this.#_ProxyCh.SetValue(this.lock, 1);
+            console.log(`[BOX] LOCK 1`);
+        }
+    }
+
+    CloseBox() {
+        if (this.openedTimer) clearTimeout(this.openedTimer);
+        this.openedTimer = null;
+        if (this.lock) {
+            this.#_ProxyCh.SetValue(this.lock, 0);
+            console.log(`[BOX] LOCK 0`);
+        }
     }
 
     Reset() {
@@ -302,6 +342,8 @@ class ClassSpiralSection {
         this._Context.currentTask?.rej?.(new Error('Reset'));
         this._Context.currentTask = null;
         this._Context.order = null;
+        if (this.openedTimer) clearTimeout(this.openedTimer);
+        this.openedTimer = null;
 
         this.#_Storage.Events.off('dispense', this._DispenseHandler);
         this.#_Storage.Events.off('fail', this._ErrorHandler);
