@@ -70,6 +70,10 @@ const LIFT_CONSTANTS = {
     }
 }
 
+const BOX_CONSTANTS = {
+    OPENED_TIME_SEC: parseValue(process.env.OPENED_TIME_SEC)
+}
+
 const FAULTS = {
     NONE: 0,
 
@@ -97,7 +101,8 @@ const FAULTS = {
     IO_PORT_ERR_1: 16,
     IO_PORT_ERR_2: 17,
 
-    FALLBACK_TIMEOUT: 18
+    FALLBACK_TIMEOUT: 18,
+    DOOR_OPENED: 20
 };
 
 const CELL_CONSTANTS = {
@@ -143,7 +148,8 @@ const FAULT_DESC_RU = {
     [FAULTS.IO_TIMEOUT]: "Таймаут обмена с устройством ввода-вывода",
     [FAULTS.IO_PORT_ERR]: "Ошибка порта ввода-вывода",
 
-    [FAULTS.FALLBACK_TIMEOUT]: "Выполнение команды прервано из за превышения ожидаемого таймаута"
+    [FAULTS.FALLBACK_TIMEOUT]: "Выполнение команды прервано из за превышения ожидаемого таймаута",
+    [FAULTS.DOOR_OPENED]: "Дверь открыта, выполнение транзакции заблокировано"
 }
 
-module.exports = { STORAGE_CONSTANSTS, LIFT_CONSTANTS, CELL_CONSTANTS, FAULTS, FAULT_DESC_RU };
+module.exports = { STORAGE_CONSTANSTS, LIFT_CONSTANTS, BOX_CONSTANTS, CELL_CONSTANTS, FAULTS, FAULT_DESC_RU };
