@@ -37,6 +37,11 @@ class ClassPostomatSection {
         this.Init();
     }
 
+    get Events() {
+        // TODO: return proxy
+        return this.#_Events;
+    }
+
     Init() {
         this.#_LocalCellStatus = Array.from({ length: this.#_CellOpts.size.rows }, () => Array(this.#_CellOpts.size.cols).fill(ClassPostomatSection.STATE.IDLE));
         this.#_Channels.storageChannels.tamperChannels.forEach((tamper, i) => {
@@ -44,11 +49,13 @@ class ClassPostomatSection {
                 let {row, col} = this.IndexToPos(i);
                 if (this.#_LocalCellStatus[row][col] == ClassPostomatSection.STATE.IDLE && val.Value == 0) {
                     this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: i});
+                    this.SetCellState (i, ClassPostomatSection.STATE.ERROR);
                     //console.log(`Error at ${i}`);
                 }
                 else if (val.Value == 1) {// this.#_LocalCellStatus[row][col] == ClassPostomatSection.STATE.OPEN && 
                     this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'off', Num: i});
                     clearTimeout(this.#_TimeOuts[i]);
+                    this.SetCellState (i, ClassPostomatSection.STATE.IDLE);
                 }
             });
             //console.log(this.#_LocalCellStatus);
@@ -74,6 +81,7 @@ class ClassPostomatSection {
     }
 
     RouteResult(msg) {
+        //console.log(msg);
         this.#_Events.emit('response', msg);
     }
 
@@ -118,30 +126,36 @@ class ClassPostomatSection {
             let port_low, port_high;
             let idx = this.PosToIndex(cell.row, cell.column);
 
-            /*if (![this.STATE.OK, this.STATE.OVERLOAD].includes(this.#_LocalCellStatus[_index])) {
-                return { code: -1, error: `Cell[${mtrxPos.row},${mtrxPos.col}] in in unavailable state: ${this.#_LocalCellStatus[_index]}`};
-            }*/
+            if (this.#_LocalCellStatus[cell.row][cell.column] == ClassPostomatSection.STATE.ERROR ||
+                this.#_LocalCellStatus[cell.row][cell.column] == ClassPostomatSection.STATE.WARN) {
+                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] is currently open`);
+                continue;
+            }
 
+            //console.log(idx);
             if (this.#_ProxyCh.GetValue(this.#_Channels.storageChannels.tamperChannels[idx]) == 0) {
                 this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: idx});
 
                 this.SetCellState (idx, ClassPostomatSection.STATE.ERROR);
 
                 this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] is currently open or its tamper broken`);
-                return;
+                continue;
             }
 
-            port_low = this.#_CellOpts.col.channels[cell.column];
-            port_high = this.#_CellOpts.row.channels[cell.row];
+            port_low = this.#_CellOpts.row.channels[cell.row];
+            port_high = this.#_CellOpts.col.channels[cell.column];
+
 
             this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'on', Num: idx});
 
             this.#_TimeOuts[idx] = setTimeout(() => {
                 this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'warn', Num: idx});
+                this.SetCellState (idx, ClassPostomatSection.STATE.WARN);
                 this.#_TimeOuts[idx] = setTimeout (() => {
                     this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: idx});
-                }, 300000);
-            }, 30000)
+                    this.SetCellState (idx, ClassPostomatSection.STATE.ERROR);
+                }, 150000);
+            }, 15000)
 
             this.SetCellState (idx, ClassPostomatSection.STATE.LOW_PORT_UP);
 
@@ -166,8 +180,9 @@ class ClassPostomatSection {
                     this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: i});
                 }
 
-                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] has its lower port locked at step 1`);
-                return;
+                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}]. State: ${this.#_LocalCellStatus[cell.row][cell.column]}. Current: {old: ${Ic_Old}, new: ${Ic_Curr}`);
+                await sleep(100);
+                continue;
             }
 
             Ic_Old = Ic_Curr;
@@ -178,7 +193,7 @@ class ClassPostomatSection {
             await sleep(100);
             Ic_Curr = this.#_ProxyCh.GetValue(this.#_Channels.electroChannels.curr);
 
-            if (Ic_Curr - Ic_Old > 3.05) {
+            if (Ic_Curr - Ic_Old > 4.50) {
                 this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_low], 0);
                 this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_high], 0);
                 clearTimeout(this.#_TimeOuts[idx]);
@@ -195,8 +210,9 @@ class ClassPostomatSection {
                     this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: i});
                 }
 
-                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] has its upper port locked at step 2`);
-                return;
+                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}]. State: ${this.#_LocalCellStatus[cell.row][cell.column]}. Current: {old: ${Ic_Old}, new: ${Ic_Curr}`);
+                await sleep(100);
+                continue;
             }
 
             Ic_Old = Ic_Curr;
@@ -207,7 +223,7 @@ class ClassPostomatSection {
             await sleep(100);
 
             Ic_Curr = this.#_ProxyCh.GetValue(this.#_Channels.electroChannels.curr);
-            if (Ic_Old - Ic_Curr > 3.05) {
+            if (Ic_Old - Ic_Curr > 4.50) {
                 this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_high], 0);
                 clearTimeout(this.#_TimeOuts[idx]);
 
@@ -221,8 +237,9 @@ class ClassPostomatSection {
                     this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: i});
                 }
 
-                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] has its lower port locked at step 3`);
-                return;
+                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}]. State: ${this.#_LocalCellStatus[cell.row][cell.column]}. Current: {old: ${Ic_Old}, new: ${Ic_Curr}`);
+                await sleep(100);
+                continue;
             }
 
             Ic_Old = Ic_Curr;
@@ -246,12 +263,14 @@ class ClassPostomatSection {
                     this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: i});
                 }
 
-                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] has its upper port locked at step 4`);
-                return;
+                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}]. State: ${this.#_LocalCellStatus[cell.row][cell.column]}. Current: {old: ${Ic_Old}, new: ${Ic_Curr}`);
+                await sleep(100);
+                continue;
             }
 
             this.SetCellState (idx, ClassPostomatSection.STATE.OPEN);
             this.#_Events.emit('dispense', cell, false);
+            await sleep(100);
         }
     }
 
