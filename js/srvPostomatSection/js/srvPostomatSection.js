@@ -1,186 +1,87 @@
 const { EventEmitter2 } = require("eventemitter2");
 const { isWithinTolerance } = require("./srvUtils");
-const ClassBaseService = require('../../srvService/js/srvService.js');
 let sleep = require('timers/promises').setTimeout;
 // const mqtt = require('mqtt');
 
-/**
- * @typedef {object} MatrixCtrlConfig
- * @property {number} ID
- * @property {string} Status
- * @property {string} Name
- * @property {string} Type
- * @property {string} Property
- * @property {string} Protocol
- * @property {string} DN
- * @property {string} IP
- * @property {string} Port
- * @property {number} SensorChExpected
- * @property {[MatrixCtrlGroupConfig]} Groups
- * @property {TypeMatrixCtrlAdvOpts} AdvOpts
- */
-
-/**
- * @typedef {object} MatrixCtrlGroupConfig
- * @property {number} mbID
- * @property {string} type
- * @property {number} startReg
- * @property {number} numRegs
- * @property {number} interval
- */    
-
-/**
- * @typedef {Object} TypeMatrixCtrlAdvOpts
- * @property {string} orientation
- * @property {object} row
- * @property {string} row.source
- * @property {[number]} row.channels
- * @property {object} col
- * @property {string} col.source
- * @property {[number]} col.channels
- */
-
-/**
- * @typedef {object} TypeCoords
- * @property {number} coords.col - Столбец (начинается с 0)
- * @property {number} coords.row - Строка (начинается с 0)
- */
-
-/**
- * @typedef {object} TypeElectrCurrentState
- * @property {number} IDLE
- * @property {number} WORK_OK
- * @property {number} STUCK
- */
-
-//const PROTOCOL = 'mmtrxmotor';
-const BUS_NAME_LIST = ['sysBus', 'logBus', 'cellMtrxBus', 'modBusBus'];
-
-const MOTOR_ON = 1;
-const MOTOR_OFF = 0;
-
-// let mqttC = mqtt.connect('10.110.71.231', { port: 1883, username: 'operator2', password: '34pass' })
-
 const STATE = {
-    OK: 'OK',
-    OVELROAD: 'OVERLOAD',
-    BLOCKED: 'BLOCKED',
-    SERVICE: 'SERVICE',
-    TAMPER_ERROR: 'TAMPER_ERROR',
-    ACTUATOR_SHORT_CIRCUIT: 'ACTUATOR_SHORT_CIRCUIT',
-    ACTUATOR_NO_POWER: 'ACTUATOR_NO_POWER'
+    IDLE: 'IDLE',
+    LOW_PORT_UP: 'LOW_PORT_UP',
+    HIGH_PORT_UP: 'HIGH_PORT_UP',
+    HIGH_PORT_DOWN: 'HIGH_PORT_DOWN',
+    LOW_PORT_DOWN: 'LOW_PORT_DOWN',
+    OPEN: 'OPEN',
+    WARN: 'WARN',
+    ERROR: 'ERROR'
 }
 
-const LED_COLOR = {
-    WHITE: Array(9).fill(255),
-    RED: [255, 0, 0, 255, 0, 0, 255, 0, 0]
-}
-
-class ClassModBusMatrixCell_S extends ClassBaseService {
-   
+class ClassPostomatSection {
     static STATE = STATE;
-    static LED_COLOR = LED_COLOR;
-    #_MatrixCtrl;
-    #_MatrixOpts = {};
-    #_LocalCellStatus = [];
-    #_TransactionStep;
-    #_OuterChannels = {};
+    #_LocalCellStatus;
+    #_TimeOuts = [];
+    #_CellOpts = {};
+    #_Channels = {};
     #_ProxyCh;
+    #_Events;
+    _Target;
+    #_Context = { 
+        order: null,
+        currentTask: null
+    };
     
-    constructor({ _busList, _advOpts }) {
-        // передача в супер-конструктор имени службы и списка требуемых шин
-        super({ _name: 'cellMtrx', _busNameList: BUS_NAME_LIST, _busList });
-        this.#_MatrixOpts = _advOpts;
-        this.sourceIsRow = false;
+    constructor({ channels, advOpts, Prox, target }) {
+        this.#_ProxyCh = Prox;
+        this.#_Channels = channels;
+        this._Target = target;
+        this.#_Events = new EventEmitter2();
+        this.#_CellOpts = advOpts.cellOpts;
         this.Init();
-        this.FillEventOnList('sysBus', ['all-init-stage1-set']);
-        this.FillEventOnList('cellMtrxBus', ['cellMtrx-cmd']);
     }
 
-    Sources() {
-        for (let source of Object.values(this.SourcesState)) {
-            if (source.Protocol === PROTOCOL && !source.IsConnected && source.CheckProcess && source.Status === 'active')
-                yield source;
-        };
-    }
-
-    HandlerEvents_all_init_stage1_set(_topic, _msg) {
-        super.HandlerEvents_all_init_stage1_set(_topic, _msg);
-
-        for (let source of this.Sources) {
-            
-        }
-    }
-    /**
-     * @method
-     * @public
-     * @description Отправляет службе mqttclient топик и значение, которое требуется записать
-     * @param {string} _topic 
-     * @param {*} _msg 
-     */
-    async HandlerEvents_cellMtrx_cmd(_topic, msg) {
-        /*let _msg = { 
-            arg: [],
-            value: [{
-                target: index,
-                cmd: 'On',
-                args: [{ step: 1 } ]
-            }]
-        }*/
-        const { hash } = msg.metadata;
-        // const [ source_name ] = _msg.arg;
-        // const { source } = _msg.metadata;
-
-        const [{ target, cmd, args }]= msg.value;
-        // let coords = this.IndexToPos(target);
-        let error = false; 
-        switch (cmd) {
-            case 'On':
-                try {
-                    await this.On(target, ...args);
-                } catch (e) {
-                    error = true;
-                    // TODO: log
-                }
-                break;
-
-            case 'Off':
-                try {
-                    await this.Off(target, ...args);
-                } catch (e) {
-                    error = true;
-                    break;
-                }
-            default:
-                break;
-        }
-        let resArg = [];
-        let resValue = { ...msg.value[0], error };
-        this.EmitEvents_proxycellMtrx_res({ hash, arg: resArg, value: [resValue] });
-    }
-
-    EmitEvents_proxycellMtrx_res({ hash, arg, value }) {
-        const msg = {
-            hash,
-            dest: 'proxycellMtrx',
-            com: 'proxycellMtrx-res',
-            arg,
-            value
-        };
-        
-        this.EmitMsg('cellMtrxBus', msg.com, msg);
-    }
-    
     Init() {
-        let rowMbOpts = this.#_MatrixOpts.row.source;
-        let colMbOpts = this.#_MatrixOpts.col.source;
-        this.#_MatrixCtrl = { 
-            row: new KC868(rowMbOpts), //TODO
-            col: new KC868(colMbOpts) 
+        this.#_LocalCellStatus = Array.from({ length: this.#_CellOpts.size.rows }, () => Array(this.#_CellOpts.size.cols).fill(ClassPostomatSection.STATE.IDLE));
+        this.#_Channels.storageChannels.tamperChannels.forEach((tamper, i) => {
+            this.#_ProxyCh.Events.on(`${tamper}-value`, (val) => {
+                let {row, col} = this.IndexToPos(i);
+                if (this.#_LocalCellStatus[row][col] == ClassPostomatSection.STATE.IDLE && val.Value == 0) {
+                    this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: i});
+                    //console.log(`Error at ${i}`);
+                }
+                else if (val.Value == 1) {// this.#_LocalCellStatus[row][col] == ClassPostomatSection.STATE.OPEN && 
+                    this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'off', Num: i});
+                    clearTimeout(this.#_TimeOuts[i]);
+                }
+            });
+            //console.log(this.#_LocalCellStatus);
+        });
+        this.#_Events.on('dispense', (result, error) => this.OnResult(result, error));
+    }
+
+    OnResult(cell, errorMessage='') {
+        const { ID } = this.#_Context?.order ?? {};
+        if (ID) {
+            this.RouteResult({
+                Response: {
+                    ID: crypto.randomUUID(),
+                    ParentID: ID,			        // идентификатор транзакции, на которую отвечаем
+                    Timestamp: new Date().getTime(),
+                    Target: this._Target,
+                    Cell: cell,
+                    Result: errorMessage ? 'FAIL' : 'OK',           
+                    Message: errorMessage ? errorMessage : 'Операция выполнена успешно'
+                }  
+            });
         };
     }
-    get MatrixCtrl() {
-        return this.#_MatrixCtrl;
+
+    RouteResult(msg) {
+        this.#_Events.emit('response', msg);
+    }
+
+    async PerformTransaction(transaction, param0) {
+        const { mock } = param0 ?? {}; 
+        const { ID, Cells } = transaction;
+        this.#_Context.order = { ID, Cells };
+        return this.ProcessCell(Cells);
     }
 
     /**
@@ -190,104 +91,174 @@ class ClassModBusMatrixCell_S extends ClassBaseService {
      * @param {number} width The number of columns in the grid.
      * @returns {{row: number, column: number}} An object containing the row and column.
      */
-    IndexToPos(index) {
-        let width = this.#_MatrixOpts.col.channels.length;
+    IndexToPos( index ) {
+        let width = this.#_CellOpts.size.cols;
         
         return { row: Math.floor(index / width), col: index % width };
     }
 
-    async ProcessCell ( _index ) {
-        let mtrxPos = this.IndexToPos(_index);        
-        let Ic_Old, Ic_Curr;
+    /**
+     * Converts a linear index to row and column indices.
+     * 
+     * @param {number} index The linear index (0-based).
+     * @param {number} width The number of columns in the grid.
+     * @returns {{row: number, column: number}} An object containing the row and column.
+     */
+    PosToIndex ( row, col ) {
+        let width = this.#_CellOpts.size.cols;
         
-        if (![this.STATE.OK, this.STATE.OVERLOAD].includes(this.#_LocalCellStatus[_index])) {
-            return { code: -1, error: `Cell[${mtrxPos.row},${mtrxPos.col}] in in unavailable state: ${this.#_LocalCellStatus[_index]}`};
-        }
+        return row * width + col;
+    }
 
-        if (this.#_ProxyCh.GetValue(`${this.#_OuterChannels.tamper}-${String(_index).padStart(2, '0')}`) != 0) {
-            this.LEDControl(_index, this.LED_COLOR.RED);
+    async ProcessCell ( _Cells ) {
 
-            this.SetCellState (_index, this.STATE.TAMPER_ERROR);
+        for (let i = 0; i < _Cells.length; i++) {
+            let cell = _Cells[i];
+            let Ic_Old, Ic_Curr;
+            let port_low, port_high;
+            let idx = this.PosToIndex(cell.row, cell.column);
 
-            return { code: -1, error: `Cell[${mtrxPos.row},${mtrxPos.col}] is currently open or its tamper broken`};
-        }
+            /*if (![this.STATE.OK, this.STATE.OVERLOAD].includes(this.#_LocalCellStatus[_index])) {
+                return { code: -1, error: `Cell[${mtrxPos.row},${mtrxPos.col}] in in unavailable state: ${this.#_LocalCellStatus[_index]}`};
+            }*/
 
-        this.LEDControl(_index, this.LED_COLOR.WHITE);
+            if (this.#_ProxyCh.GetValue(this.#_Channels.storageChannels.tamperChannels[idx]) == 0) {
+                this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: idx});
 
-        Ic_Old = this.#_ProxyCh.GetValue(this.#_OuterChannels.current);
+                this.SetCellState (idx, ClassPostomatSection.STATE.ERROR);
 
-        //modbus command close PORT -
-        
-        await sleep(50);
-
-        Ic_Curr = this.#_ProxyCh.GetValue(this.#_OuterChannels.current);
-
-        if (!isWithinTolerance(Ic_Old, Ic_Curr, 0.05)) {
-            // modbus command ports off
-            this.SetCellState (_index, this.STATE.BLOCKED);
-            // mqtt - transaction failed
-            this.LEDControl(_index, this.LED_COLOR.RED);
-
-            let width = this.#_MatrixOpts.col.channels.length;
-
-            for (let i = width * mtrxPos.row; i < width * mtrxPos.row + width; i++) {
-                if (![this.STATE.OK, this.STATE.OVERLOAD].includes(this.#_LocalCellStatus[i]))
-                    continue;
-
-                this.SetCellState (i, this.STATE.BLOCKED);
-                this.LEDControl(i, this.LED_COLOR.RED);
+                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] is currently open or its tamper broken`);
+                return;
             }
 
-            return { code: -1, error: `Cell[${mtrxPos.row},${mtrxPos.col}] has its lower port locked`};
-        }
+            port_low = this.#_CellOpts.col.channels[cell.column];
+            port_high = this.#_CellOpts.row.channels[cell.row];
 
-        Ic_Old = Ic_Curr;
+            this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'on', Num: idx});
 
+            this.#_TimeOuts[idx] = setTimeout(() => {
+                this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'warn', Num: idx});
+                this.#_TimeOuts[idx] = setTimeout (() => {
+                    this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: idx});
+                }, 300000);
+            }, 30000)
 
-        //modbus command close PORT +
-        
-        await sleep(50);
+            this.SetCellState (idx, ClassPostomatSection.STATE.LOW_PORT_UP);
 
-        Ic_Curr = this.#_ProxyCh.GetValue(this.#_OuterChannels.current);
+            Ic_Old = this.#_ProxyCh.GetValue(this.#_Channels.electroChannels.curr);
 
-        if (!isWithinTolerance(Ic_Old + 3.00, Ic_Curr, 0.05)) {
-            // modbus command ports off
-            this.SetCellState (_index, this.STATE.BLOCKED);
-            // mqtt - transaction failed
-            this.LEDControl(_index, this.LED_COLOR.RED);
+            this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_low], 1);
+            await sleep(100);
 
-            let height = this.#_MatrixOpts.row.channels.length;
-            let width = this.#_MatrixOpts.col.channels.length;
+            Ic_Curr = this.#_ProxyCh.GetValue(this.#_Channels.electroChannels.curr);
 
-            for (let i = mtrxPos.row; i < width * height; i += width) {
-                if (![this.STATE.OK, this.STATE.OVERLOAD].includes(this.#_LocalCellStatus[i]))
-                    continue;
+            if (Ic_Old - Ic_Curr > 0.05) {              
+                this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_low], 0);
+                clearTimeout(this.#_TimeOuts[idx]);
 
-                this.SetCellState (i, this.STATE.BLOCKED);
-                this.LEDControl(i, this.LED_COLOR.RED);
+                let width = this.#_CellOpts.size.cols;
+
+                for (let i = width * cell.row; i < width * cell.row + width; i++) {
+                    if (![ClassPostomatSection.STATE.IDLE].includes(this.#_LocalCellStatus[i]))
+                        continue;
+
+                    this.SetCellState (i, ClassPostomatSection.STATE.ERROR);//
+                    this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: i});
+                }
+
+                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] has its lower port locked at step 1`);
+                return;
             }
 
-            return { code: -1, error: `Cell[${mtrxPos.row},${mtrxPos.col}] has its upper port locked`};
+            Ic_Old = Ic_Curr;
+
+            this.SetCellState (idx, ClassPostomatSection.STATE.HIGH_PORT_UP);
+            this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_high], 1);            
+
+            await sleep(100);
+            Ic_Curr = this.#_ProxyCh.GetValue(this.#_Channels.electroChannels.curr);
+
+            if (Ic_Curr - Ic_Old > 3.05) {
+                this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_low], 0);
+                this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_high], 0);
+                clearTimeout(this.#_TimeOuts[idx]);
+
+
+                let height = this.#_CellOpts.size.rows;
+                let width = this.#_CellOpts.size.cols;
+
+                for (let i = cell.row; i < width * height; i += width) {
+                    if (![ClassPostomatSection.STATE.IDLE].includes(this.#_LocalCellStatus[i]))
+                        continue;
+
+                    this.SetCellState (i, ClassPostomatSection.STATE.ERROR);//
+                    this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: i});
+                }
+
+                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] has its upper port locked at step 2`);
+                return;
+            }
+
+            Ic_Old = Ic_Curr;
+
+            this.SetCellState (idx, ClassPostomatSection.STATE.LOW_PORT_DOWN);
+            this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_low], 0);
+
+            await sleep(100);
+
+            Ic_Curr = this.#_ProxyCh.GetValue(this.#_Channels.electroChannels.curr);
+            if (Ic_Old - Ic_Curr > 3.05) {
+                this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_high], 0);
+                clearTimeout(this.#_TimeOuts[idx]);
+
+                let width = this.#_CellOpts.size.cols;
+
+                for (let i = width * cell.row; i < width * cell.row + width; i++) {
+                    if (![ClassPostomatSection.STATE.IDLE].includes(this.#_LocalCellStatus[i]))
+                        continue;
+
+                    this.SetCellState (i, ClassPostomatSection.STATE.ERROR);//
+                    this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: i});
+                }
+
+                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] has its lower port locked at step 3`);
+                return;
+            }
+
+            Ic_Old = Ic_Curr;
+
+            this.SetCellState (idx, ClassPostomatSection.STATE.HIGH_PORT_DOWN);
+            this.#_ProxyCh.SetValue(this.#_Channels.storageChannels.portChannels[port_high], 0);
+
+            await sleep(100);
+
+            Ic_Curr = this.#_ProxyCh.GetValue(this.#_Channels.electroChannels.curr);
+            if (Ic_Old - Ic_Curr > 0.05) {
+                clearTimeout(this.#_TimeOuts[idx]);
+                let height = this.#_CellOpts.size.rows;
+                let width = this.#_CellOpts.size.cols;
+
+                for (let i = cell.row; i < width * height; i += width) {
+                    if (![ClassPostomatSection.STATE.IDLE].includes(this.#_LocalCellStatus[i]))
+                        continue;
+
+                    this.SetCellState (i, ClassPostomatSection.STATE.ERROR);//
+                    this.#_ProxyCh.SetValue(this.#_Channels.ledChannels.ledCtrl, {target: 'error', Num: i});
+                }
+
+                this.#_Events.emit('dispense', cell, `Cell[${cell.row},${cell.column}] has its upper port locked at step 4`);
+                return;
+            }
+
+            this.SetCellState (idx, ClassPostomatSection.STATE.OPEN);
+            this.#_Events.emit('dispense', cell, false);
         }
-
-
-
     }
 
     SetCellState ( _index, _state ) {
-        this.#_LocalCellStatus[_index] = _state;
+        let {row, col} = this.IndexToPos(_index);
+        this.#_LocalCellStatus[row][col] = _state;
         // publish MQTT
-    }
-
-    LEDControl ( _index, _colors ) {
-        let LEDState = {
-            target: 'setup',
-            register: 100 + _index * 2,
-            value: _colors
-        };
-
-        this.#_ProxyCh.SetValue({ chName: this.#_OuterChannels.led, Value: LEDState });
-
     }
 
     /**
@@ -299,7 +270,7 @@ class ClassModBusMatrixCell_S extends ClassBaseService {
      * @returns {Promise<boolean>}
      */
     async On(index, { step }) {
-        let { col, row } = this.IndexToPos(index);
+        /*let { col, row } = this.IndexToPos(index);
 
         let sourceIO = this.sourceIsRow ? this.#_MatrixCtrl.row : this.#_MatrixCtrl.col;
         let groundIO = this.sourceIsRow ? this.#_MatrixCtrl.col : this.#_MatrixCtrl.row;
@@ -314,7 +285,7 @@ class ClassModBusMatrixCell_S extends ClassBaseService {
                 return await this.Switch(sourceIO, srcSwChNum, MOTOR_ON);
             default:
                 return Promise.reject(`Invaild request: step must be specified and be in range 1..2`);
-        }
+        }*/
     }
 
     /**
@@ -326,12 +297,12 @@ class ClassModBusMatrixCell_S extends ClassBaseService {
      * @returns {Promise<boolean>}
      */
     async Off(index, { step }) {
-        let { col, row } = this.IndexToPos(index);
+        /*let { col, row } = this.IndexToPos(index);
 
         let sourceIO = this.sourceIsRow ? this.#_MatrixCtrl.row : this.#_MatrixCtrl.col;
         let groundIO = this.sourceIsRow ? this.#_MatrixCtrl.col : this.#_MatrixCtrl.row;
         /*if (!source ?? !ground)
-            return Promise.reject(`No element [${row}][${col}]`);*/
+            return Promise.reject(`No element [${row}][${col}]`);
 
         let srcSwChNum = this.sourceIsRow ? this.#_MatrixOpts.row.channels[row] : this.#_MatrixOpts.col.channels[col];
         let gndSwChNum = this.sourceIsRow ? this.#_MatrixOpts.col.channels[col] : this.#_MatrixOpts.row.channels[row];
@@ -343,7 +314,7 @@ class ClassModBusMatrixCell_S extends ClassBaseService {
                 return await this.Switch(groundIO, gndSwChNum, MOTOR_OFF);
             default:
                 return Promise.reject(`Invaild request: step must be specified and be in range 1..2`);
-        }
+        }*/
     }
 
     async OffEmergency() {
@@ -388,4 +359,4 @@ class KC868 {
 }
 
 // let a = new ClassSpiralSectionStorage({advOpts: {rows:12, cols: 8}});
-module.exports = ClassModBusMatrixCell_S;
+module.exports = ClassPostomatSection;

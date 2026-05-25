@@ -1,0 +1,24 @@
+{
+    "Transaction": {
+        "ID": "36-symbol GUID",
+        "Timestamp": "Fri, 02 Feb 1996 08:04:05",
+        "UserID": "aa-bb-cc",
+        "Source": "HiLvl",
+        "Orders": [
+            {
+                "Target": {
+                    "id": "GUID",
+                    "name": "Machine-1-spiral"
+                },
+                "Command": "getItem",
+                "Cells": [
+                    {
+                        "row": 0,
+                        "column": 0,
+                        "quantity": 1
+                    }
+                ]
+            }
+        ]
+    }
+}
