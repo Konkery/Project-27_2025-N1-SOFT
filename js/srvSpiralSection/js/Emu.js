@@ -1,4 +1,4 @@
-const { LIFT_CONSTANTS, STORAGE_CONSTANSTS, FAULTS, CELL_CONSTANTS } = require("./SpiralSectionConstants.js");
+const { LIFT_CONSTANTS, STORAGE_CONSTANSTS, FAULTS, CELL_CONSTANTS, BOX_CONSTANTS } = require("./SpiralSectionConstants.js");
 const { EventEmitter2 } = require("eventemitter2");
 const mqtt = require('mqtt');
 const { BitMask, isWithinTolerance } = require("./srvUtils.js");
@@ -23,24 +23,20 @@ const TARGET = {
 }
 
 async function CreateMQTTConnection (_source) {
-    return new Promise(async (res, rej) => {
-        let options = Object.assign({
-            port:     _source.Port,
-            username: _source.Login,
-            password: _source.Password,
-        }, _source.ConnectOpts);
-        options.protocol ??= 'mqtt'; //по умолчанию mqtt://
-
-        let url = `${options.protocol}://${(_source.IP) ? _source.IP : _source.DN}`;
-
-        try {
-            const connection = await mqtt.connectAsync(url, options);
-            res({ source: _source, client: connection });
-        } catch (e) {
-            console.log("ошибка подключения к брокеру");
-            res({ source: _source, client: null });
-        }
-    });
+    let options = Object.assign({
+        port:     _source.Port,
+        username: _source.Login,
+        password: _source.Password,
+    }, _source.ConnectOpts);
+    options.protocol ??= 'mqtt'; //по умолчанию mqtt://
+    let url = `${options.protocol}://${(_source.IP) ? _source.IP : _source.DN}`;
+    let connection = null;
+    try {
+        connection = await mqtt.connectAsync(url, options);
+    } catch (e) {
+        console.log("ошибка подключения к брокеру");
+    }
+    return ({ source: _source, client: connection });
 }
 
 class DeviceEmulator {
@@ -51,6 +47,11 @@ class DeviceEmulator {
         this.proxy = ProxyCh;
         /** @type {import("./srvSpiralSection.js").TypeSpiralSectionChannels} */
         this.ch = channels;
+        this.values = {
+            optic: BOX_CONSTANTS.BOX_CLOSED,
+            door: BOX_CONSTANTS.DOOR_CLOSED
+        }
+
         this.faultAdapter = null;
         this.hbridgeKeys = advOpts.liftOpts.keys;
         this.hbridgeSource = advOpts.liftOpts.source;
@@ -79,11 +80,13 @@ class DeviceEmulator {
     }
 
     startPolling() {
-        let liftCurrentCache = this.lift.values.current;
         this.pollInterval = setInterval(() => {
+            this._setValue(this.ch.optic, this.values.optic);
+            this._setValue(this.ch.door, this.values.door);
+
             this._setValue(this.ch.liftChannels.liftBottomTamper, this.lift.values.liftBottomTamper);
             this._setValue(this.ch.liftChannels.liftLevelSensor, this.lift.values.liftLevelSensor);
-            this._setValue(this.ch.liftChannels.current, this.lift.values.current);
+            this._setValue(this.ch.liftChannels.current, this.lift.values.current+this.spiralSection.values.current);
             /*let curr = this.lift.values.current;
             if (!isWithinTolerance(liftCurrentCache, curr, 0.05)) {
                 liftCurrentCache = curr;
@@ -93,7 +96,7 @@ class DeviceEmulator {
             if (this.ch.liftChannels.short)
                 this._setValue(this.ch.liftChannels.short, this.lift.values.short);
             
-            this._setValue(this.ch.storageChannels.current, this.spiralSection.values.current);
+            // this._setValue(this.ch.storageChannels.current, this.spiralSection.values.current);
             for (let i = 0; i < this.ch.storageChannels.spiralTamperChannels.length; i++) {
                 this._setValue(this.ch.storageChannels.spiralTamperChannels[i], this.spiralSection.values.spiralTamperChannels[i]);
             }
@@ -319,7 +322,7 @@ class SpiralSection {
         this.matrix = new Matrix({ rows: 8, cols: 12 });
         this.matrix.onOn = this._startSpiralMotor.bind(this);
         this.matrix.onOff = this._stopSpiralMotor.bind(this);
-        this.t_rot_avg = STORAGE_CONSTANSTS.AVG_ROTATOIN_TIME;   // время до срабатывания тампера спирали
+        this.t_rot_avg = STORAGE_CONSTANSTS.AVG_ROTATION_TIME;  
     }
 
     getState() {
@@ -328,7 +331,7 @@ class SpiralSection {
 
     getDefaultValues() {
         return {
-            spiralTamperChannels: Array.from({ length: 8 }).fill(STORAGE_CONSTANSTS.TAMPER_OFF),
+            spiralTamperChannels: Array.from({ length: 8 }).fill(STORAGE_CONSTANSTS.TAMPER_ON),
             current: peekValueInRange(STORAGE_CONSTANSTS.CURRENT_RANGE.IDLE),
             short: 0,
         };
@@ -364,8 +367,8 @@ class SpiralSection {
             this.values.current = peekValueInRange(STORAGE_CONSTANSTS.CURRENT_RANGE.OVERLOAD);
         } else {
             this.values.current = peekValueInRange(STORAGE_CONSTANSTS.CURRENT_RANGE.WORK_OK);
-            console.log(`[EMU] Ток спирали ${this.values.current}`);
-
+            // console.log(`[EMU] Ток спирали ${this.values.current}`);
+            this.values.spiralTamperChannels[row] = STORAGE_CONSTANSTS.TAMPER_OFF;
             this.rotInterv = setInterval(() => {
                 if (!this.faults.hasFault(FAULTS.TAMPER_ERROR)) {
                     this.values.spiralTamperChannels[row] = STORAGE_CONSTANSTS.TAMPER_ON;
@@ -386,7 +389,7 @@ class SpiralSection {
         if (this.rotInterv) clearInterval(this.rotInterv);
         if (this.rotTimeout) clearTimeout(this.rotTimeout);
         this.values.current = peekValueInRange(STORAGE_CONSTANSTS.CURRENT_RANGE.IDLE);
-        this.values.spiralTamperChannels[col] = STORAGE_CONSTANSTS.TAMPER_UNDEFINED;
+        // this.values.spiralTamperChannels[col] = STORAGE_CONSTANSTS.TAMPER_UNDEFINED;
         this.shortEntries.delete(`${row}-${col}`);
         this.values.short = this.shortEntries.size > 0;
     } 
@@ -477,7 +480,7 @@ class Lift {
         this.direction = 0;        // -1 вниз, +1 вверх
         this.lastLevelEventTime = 0;
 
-        this.t_level_avg = LIFT_CONSTANTS.ELEVATE_NEX_AVG_TIME;   // время между уровнями
+        this.t_level_avg = LIFT_CONSTANTS.ELEVATE_NEXT_AVG_TIME;   // время между уровнями
         this.zeroPulseGap = LIFT_CONSTANTS.DOUBLE_TRIGGER_WINDOW;   // пауза между двойным импульсом на 0 уровне
     }
 
@@ -943,6 +946,7 @@ class FaultAdapter {
         if (action.type === 'setFault') {
 
             if (target === TARGET.SPIRAL) {
+                this.emu.spiralSection.faults.clearAllFaults();
                 this.emu.spiralSection.faults.setFault(FAULTS[action.fault]);
             } else if (target == TARGET.LIFT) {
                 this.emu.lift.faults.setFault(FAULTS[action.fault]);
