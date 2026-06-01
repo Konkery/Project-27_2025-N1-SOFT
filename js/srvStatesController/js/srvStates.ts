@@ -48,14 +48,6 @@ export type BUS_STATE = {
     temp: MeasKeys
 }
 
-export const SPIRAL_LIFT_STATE = {
-    OK:                 'OK',
-    LIFT_SHORT_CIRCUIT: 'LIFT_SHORT_CIRCUIT',
-    LIFT_NO_POWER:      'LIFT_NO_POWER',
-    LIFT_TAMPER_ERROR:  'LIFT_TAMPER_ERROR',
-    LIFT_LEVEL_ERROR:   'LIFT_LEVEL_ERROR'
-} as const;
-
 export const GLOBAL_MACHINE_STATE = {
     OK: 'OK',
     SERVICE: 'SERVICE',
