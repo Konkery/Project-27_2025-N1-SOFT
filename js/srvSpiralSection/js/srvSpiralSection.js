@@ -2,39 +2,15 @@ const { EventEmitter2 } = require("eventemitter2");
 const { ClassSpiralSectionLift }  = require('./srvSpiralSectionLift');
 const { ClassSpiralSectionStorage } = require('./srvSpiralSectionStorage');
 const { ClassFSM: FSM } = require('./srvFSM');
-const { STATES: BROKER_STATES } = require("./srvVendingMachineStates");
 const { ClassFault } = require('./srvUtils');
-const { FAULT_DESC_RU, BOX_CONSTANTS, FAULTS } = require('./SpiralSectionConstants');
-const { error } = require('console');
-const LIFT_STATUS = BROKER_STATES.SECTIONS.LIFT.STATUS;
-
-const SPIRAL_STATUS = BROKER_STATES.CELLS.STATUS;
+const { FAULTS } = require('./SpiralSectionConstants');
+const { default: BaseSectionState } = require("../../srvStatesController/js/srvBaseSectionState");
+const ClassDeliveryBox = require("./srvDelieveryBox");
+const { AVAILABLE } = require("../../srvStatesController/js/srvStates");
 
 let sleep = require('timers/promises').setTimeout;
 
 const DELAY_BEFORE_DISPENSE = 100;
-
-/**
- * @typedef {object} TypeTransaction
- * @property {string} ID
- * @property {TypeTransactionTarget} Target
- * @property {string} Command
- * @property {TypeTransactionCell[]} Cells
- */
-
-
-/**
- * @typedef {object} TypeTransactionTarget
- * @property {string} id
- * @property {string} name
- */
-
-/**
- * @typedef {object} TypeTransactionCell
- * @property {number} row
- * @property {number} column
- * @property {number} quantity
- */
 
 /** 
  * @typedef {object} TypeProxyCh
@@ -48,6 +24,8 @@ const DELAY_BEFORE_DISPENSE = 100;
  * @typedef {object} TypeSpiralSectionChannels
  * @property {import('./srvSpiralSectionStorage').TypeSpiralSectionStorageChannels} storageChannels
  * @property {import('./srvSpiralSectionLift').TypeSpiralSectionLiftChannels} liftChannels
+ * @property {import('./srvDelieveryBox').TypeDeliveryBoxChannels} boxChannels 
+ * @property {string} door
  */
 
 /**
@@ -65,13 +43,7 @@ const DELAY_BEFORE_DISPENSE = 100;
  * @property {string} DISPENSE_START_MOCK
  */
 
-/**
- * @typedef {object} TypeSpiralSectionLiftContext
- * @property {number|undefined} currentLevel
- * @property {number|undefined} requiredLevel
- */
-
-class ClassSpiralSection {
+class ClassSpiralSection extends EventEmitter2 {
 
     static STATE = {
         IDLE:            'IDLE',
@@ -93,8 +65,8 @@ class ClassSpiralSection {
     #_Lift = null;
     /** @type {ClassSpiralSectionStorage} */
     #_Storage = null;
-    /** @type {TypeTransactionTarget} */
-    _Target = null;
+    /** @type {ClassDeliveryBox} */
+    #_Box = null;
 
     #_StatesGraph = {
         [ClassSpiralSection.STATE.IDLE]: {
@@ -110,6 +82,8 @@ class ClassSpiralSection {
             [this.EVENTS.UNLOADING_DONE]: { state: ClassSpiralSection.STATE.IDLE, action: this.Idle.bind(this) }
         }
     };
+    /** @type {BaseSectionState} */
+    #_SectionState = null;
 
     #_FSM = new FSM({ stateGraph: this.#_StatesGraph, defaultState: ClassSpiralSection.STATE.IDLE });
     /**
@@ -118,21 +92,21 @@ class ClassSpiralSection {
      * @param {TypeProxyCh} param0.ProxyCh
      * @param {TypeSpiralSectionChannels} param0.channels
      * @param {TypeSpiralSectionOpts} param0.advOpts
-     * @param {TypeTransactionTarget} param0.target
+     * @param {BaseSectionState} param0.SectionState
      */
-    constructor({ ProxyCh, channels, advOpts, target }) {
+    constructor({ ProxyCh, channels, advOpts, SectionState }) {
+        super();
         this.#_ProxyCh = ProxyCh;
         this.#_Channels = channels;
-        this.#_Lift = new ClassSpiralSectionLift({ ProxyCh, channels: channels.liftChannels, advOpts: advOpts.liftOpts });
-        this.#_Storage = new ClassSpiralSectionStorage({ ProxyCh, channels: channels.storageChannels, advOpts: advOpts.storageOpts });
-        this._Target = target;
-        this.lock = channels.lock;
-        this.optic = channels.optic;
-        this.door = channels.door;
+        this.#_Lift = new ClassSpiralSectionLift({ ProxyCh, channels: channels.liftChannels, advOpts: advOpts.liftOpts, SectionState });
+        this.#_Storage = new ClassSpiralSectionStorage({ ProxyCh, channels: channels.storageChannels, advOpts: advOpts.storageOpts, SectionState });
+        this.#_Box = new ClassDeliveryBox({ ProxyCh, channels: channels.boxChannels, advOpts: {}, SectionState });
+        this.#_Channels.door = channels.door;
+        this.#_SectionState = SectionState;
         this.Init();
     }
 
-    get Target() { return this._Target; }
+    get InWork() { return this._Context.currentTask; }
 
     /**
      * @returns {TypeSpiralSectionEvents}
@@ -151,60 +125,11 @@ class ClassSpiralSection {
         return this.#_Events;
     }
 
-    IsDoorClosed() {
-        if (!this.door) return true;
-        return this.#_ProxyCh.GetValue(this.door) == 1;
-    }
-
-    IsBoxClosed() {
-        if (!this.optic) return true;
-        return this.#_ProxyCh.GetValue(this.optic) == 1;
-    }
-
     Init() {
         this._DispenseHandler = this.HandleDispense.bind(this);
         this.#_Storage.Events.on('dispense', this._DispenseHandler);
-        this._ErrorHandler = this.HandleFail.bind(this);
-        this.#_Storage.Events.on('fail', this._ErrorHandler);
-    }
-
-    /**
-     * @param {TypeTransaction} transaction 
-     * @param {object} param0 
-     */
-    async PerformTransaction(transaction, param0) {
-        const { mock } = param0 ?? {}; 
-        const { ID, Cells } = transaction;
-        this._Context.order = { ID, Cells };
-        return mock ? this.ExecuteMock(Cells) : this.Execute(Cells);
-    }
-
-    /**
-     * 
-     * @param {TypeTransactionCell} cell 
-     * @param {boolean} error 
-     * @returns 
-     */
-    OnResult(cell, errorMessage='') {
-        debugger;
-        const { ID } = this._Context?.order ?? {};
-        if (ID) {
-            this.RouteResult({
-                Response: {
-                    ID: crypto.randomUUID(),
-                    ParentID: ID,			        // идентификатор транзакции, на которую отвечаем
-                    Timestamp: new Date().getTime(),
-                    Target: this._Target,
-                    Cell: cell,
-                    Result: errorMessage ? 'FAIL' : 'OK',           
-                    Message: errorMessage ? errorMessage : 'Операция выполнена успешно'
-                }  
-            });
-        };
-    }
-
-    RouteResult(msg) {
-        this.#_Events.emit('response', msg);
+        this._FailHandler = this.HandleFail.bind(this);
+        this.#_Storage.Events.on('fail', this._FailHandler);
     }
 
     /**
@@ -231,21 +156,24 @@ class ClassSpiralSection {
      * @returns {Promise}
      */
     async _Execute(_orders) {
-        this.CloseBox();
         try {
-            if (!this.IsDoorClosed())
-                return this.HandleErr(new ClassFault({ code: FAULTS.DOOR_OPENED }), 'Отказ в начале транзакции');
+            if (!this.IsDoorClosed() || !this.#_Box.IsOpened)
+                return this.HandleFail(undefined, new ClassFault({ code: FAULTS.DOOR_OPENED }), 'Отказ в начале транзакции');
             
             /** @type {[TypeTransactionCell]} */
             let orders = [..._orders];
             orders.sort((a, b) => a.row - b.row);   //сортировка по убыванию уровня
             try {
-                await this.#_Lift.ElevateToBaseLevel();
+                await this.#_Lift.ElevateToBottom();
             } catch (e) {
-                this.HandleErr(e, 'Ошибка при установке лифта в положение выдачи');
-                return;
+                return this.HandleFail(undefined, e, 'Ошибка при установке лифта в положение выдачи');
             }
             for (let level of new Set(orders.map(o => this.#_Storage.MaxLevel - o.row))) {
+                let ordersOnLevel = orders.filter(o => this.#_Storage.MaxLevel - o.row == level)
+                    .filter(o => this.#_Storage.IsSpiralOk(o));
+
+                if (ordersOnLevel.length == 0) continue;
+
                 await sleep(1000);
                 console.log(`[STORAGE] Команда поднять лифт на уровень ${level}`);
                 try {
@@ -254,7 +182,8 @@ class ClassSpiralSection {
                     this.HandleErr(e, `Ошибка при установке лифта на уровень ${level}`);
                     return;
                 }
-                for (let order of orders.filter(o => this.#_Storage.MaxLevel - o.row == level)) {
+
+                for (let order of ordersOnLevel) {
                     await sleep(DELAY_BEFORE_DISPENSE);
                     if (this.#_Storage.IsSpiralOk(order)) {
                         console.log(`Order: ${JSON.stringify(order)}`);
@@ -262,7 +191,7 @@ class ClassSpiralSection {
                             await this.#_Storage.Dispense(order);
                             console.log(`[STORAGE] Выполнена выдача ${JSON.stringify(order)}`);
                         } catch (e) {
-                            this.HandleErr(e, 'Не удалось выполнить выдачу ТМЦ');
+                            this.HandleFail(undefined, e, 'Не удалось выполнить выдачу ТМЦ');
                         }
                     } else {
                         console.log(`[STORAGE] Заказ ${JSON.stringify(order)} не будет выполнен в связи со статусом соответствующей ячейки`);
@@ -270,37 +199,21 @@ class ClassSpiralSection {
                 }
             }
             
-            if (this.#_Lift.State == ClassSpiralSectionLift.STATE.IDLE) {
-                let secondTry = false;
-                try {
-                    console.log(`[LIFT] Для выдачи лифт спускается на 0-й уровень`);
-                    await this.#_Lift.ElevateToBaseLevel();
-                    this.OpenBox();
-                    let t_sec = BOX_CONSTANTS.OPENED_TIME_SEC ?? 30;
-                    this.openedTimer = setTimeout(() => {
-                        this.CloseBox();
-                        // this.#_Events.emit(this.EVENTS.UNLOADING_DONE);
-                    }, t_sec*1000);
+            try {
+                console.log(`[LIFT] Для выдачи лифт спускается на 0-й уровень`);
+                await this.#_Lift.ElevateToBottom();
 
-                } catch (e) {
-                    this.HandleErr(e, 'Ошибка при установке лифта в положение выдачи');
-                    secondTry = true;
-                }
-                // /*if (this.#_Lift.MotorOk) 
-                if (secondTry) try {
-                    console.log(`[LIFT] для выдачи лифт спускается на нижний уровень`);
-                    await this.#_Lift.ElevateToBottom();
-                    this.OpenBox();
-                    let t_sec = BOX_CONSTANTS.OPENED_TIME_SEC ?? 30;
-                    this.openedTimer = setTimeout(() => {
-                        this.CloseBox();
-                        // this.#_Events.emit(this.EVENTS.UNLOADING_DONE);
-                    }, t_sec*1000);
-                
-                } catch (e) {
-                    this.HandleErr(e, 'Ошибка при установке лифта в нижнее положение');
-                }
+            } catch (e) {
+                this.HandleErr(e, 'Ошибка при установке лифта в положение выдачи');
             }
+
+            try {
+                await this.#_Box.Deliver();
+            } catch (e) {
+                this.#_SectionState.setAvailable(AVAILABLE.NO);
+                this.HandleErr(e, 'Не удалось выполнить выдачу ТМЦ');
+            }
+            
         } catch (e) {
             this.HandleErr(e, 'Ошибка выполнении транзакции');
         } finally {
@@ -319,22 +232,6 @@ class ClassSpiralSection {
         }
     }
 
-    OpenBox() {
-        if (this.lock) {
-            this.#_ProxyCh.SetValue(this.lock, 1);
-            console.log(`[BOX] LOCK 1`);
-        }
-    }
-
-    CloseBox() {
-        if (this.openedTimer) clearTimeout(this.openedTimer);
-        this.openedTimer = null;
-        if (this.lock) {
-            this.#_ProxyCh.SetValue(this.lock, 0);
-            console.log(`[BOX] LOCK 0`);
-        }
-    }
-
     Reset() {
         this.#_FSM.Reset();
         this.#_Lift.Reset();
@@ -346,82 +243,16 @@ class ClassSpiralSection {
         this.openedTimer = null;
 
         this.#_Storage.Events.off('dispense', this._DispenseHandler);
-        this.#_Storage.Events.off('fail', this._ErrorHandler);
-    }
-
-    HandleErr(e, prefixMsg) {
-        let errMsg = (e instanceof Error) ?
-            `${prefixMsg}: ${e.message}.`
-            : (e instanceof ClassFault) ?
-            `${prefixMsg}: ${FAULT_DESC_RU[e.code]}.`
-            :`${prefixMsg}: ошибка не определена.`;
-        console.log(`[SPIRAL] Error ${errMsg}`);
-        this.OnResult(null, errMsg);
-    }
-
-    HandleFail(cell, fault) {
-        const prefixMsg = 'Ошибка при выдаче ТМЦ';
-        let errMsg = (fault instanceof ClassFault) ?
-            `${prefixMsg}: ${FAULT_DESC_RU[fault.code]}.`
-          : `${prefixMsg}: ошибка не определена.`;
-        console.log(`[SPIRAL] Fail ${errMsg}`);
-        this.OnResult(cell, errMsg);
+        this.#_Storage.Events.off('fail', this._FailHandler);
     }
 
     HandleDispense(cell) {
-        return this.OnResult(cell);
+        this.emit('result', { cell });
     }
 
-    /**
-     * 
-     * @param {[TypeTransactionCell]} _orders 
-     * @returns {Promise}
-     */
-    async ExecuteMock(_orders) {
-        return new Promise((res, rej) => {
-            if (this._Context.currentTask) 
-                return rej(new Error('Выполняется предыдущая операция'));
-
-            if (this.#_FSM.State != ClassSpiralSection.STATE.IDLE) 
-                return rej(new Error('Секция не в состоянии покоя'));
-
-            this._Context.currentTask = { res, rej };
-            this.#_FSM.Dispatch(this.EVENTS.DISPENSE_START_MOCK, _orders);
-        });
-    }
-
-    /**
-     * MOCK Execute
-     * Выполняет имитацию выдачи:
-     *  for order in orders
-     *    for i < order.quantity
-     *      OnResult(order)
-     *      delay 1 sec
-     * 
-     * @param {[TypeTransactionCell]} _orders 
-     */
-    async _ExecuteMock(_orders) {
-        try {
-            /** @type {[TypeTransactionCell]} */
-            const orders = [..._orders];
-            for (const order of orders) {
-                for (let i = 0; i < order.quantity; i++) {
-                    console.log(`[MOCK] Dispense row=${order.row}, column=${order.column}, item=${i + 1}/${order.quantity}`);
-                    // имитация успешной выдачи
-                    this.OnResult({...order, quantity: 1 }, '');
-
-                    // таймаут 1 сек
-                    await sleep(1000);
-                }
-            }
-
-        } catch (e) {
-            this.HandleErr(e, 'Ошибка выполнении MOCK транзакции');
-        } finally {
-            return this.#_FSM.Dispatch(this.EVENTS.OPERATION_FINISHED);
-        }
+    HandleFail(cell, fault, message) {
+        this.emit('fail', { cell, fault, message });
     }
 }
-
 
 module.exports = { ClassSpiralSection };
