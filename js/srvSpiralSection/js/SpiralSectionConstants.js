@@ -71,7 +71,11 @@ const LIFT_CONSTANTS = {
 }
 
 const BOX_CONSTANTS = {
-    OPENED_TIME_SEC: parseValue(process.env.OPENED_TIME_SEC)
+    OPENED_TIME_SEC: parseValue(process.env.OPENED_TIME_SEC),
+    DOOR_CLOSED: parseValue(process.env.DOOR_CLOSED),
+    BOX_CLOSED:  parseValue(process.env.BOX_CLOSED),
+    UNLOCK_ON: parseValue(process.env.UNLOCK_ON),
+    UNLOCK_OFF: parseValue(process.env.UNLOCK_OFF),
 }
 
 const FAULTS = {
