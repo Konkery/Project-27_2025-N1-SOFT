@@ -1,46 +1,59 @@
-// const Queue = require("./queue");
+const { randomUUID } = require('node:crypto');
+const { default: StatesController } = require('../../srvStatesController/js/srvSectionStateController');
+const { GLOBAL_MACHINE_STATE, BUS_MEAS_STATE, AVAILABLE } = require('../../srvStatesController/js/srvStates');
+
 const EventEmitter = require('eventemitter2').EventEmitter2;
 
-/**
- * @typedef {Object<string, import('./HiLvlMessages').TypeTarget>} TypeProxySectionConfig
- */
-
-class ClassProxySection /*extends EventEmitter*/ {
+const COMMANDS = {
+    GetItem: 'GetItem', //– запрос на выдачу ТМЦ из указанных ячеек;
+    GetAll: 'GetAll', // – выдача ТМЦ, открытие всех ячеек (массив Cells в данном случае не учитывается);
+    SetItem: 'SetItem', // – загрузка ТМЦ в указанные ячейки;
+    SetAll: 'SetAll', // – загрузка ТМЦ во все ячейки по загруженной конфигурации;
+    GetStatus: 'GetStatus',// – получение статуса аппарата;
+    Reboot: 'Reboot', //– перезагрузка аппарата;
+    SetConfig: 'SetConfig', ///– загрузка конфигурационного файла;
+    Maintenance: 'Maintenance', //– перевод аппарата в режим обслуживания
+}
+class ClassProxySection {
     /**
-     * @param {[TypeProxySectionConfig]} sections 
+     * 
+     * @param {object} param0 
+     * @param {[import('./Messages').TypeTarget]} param0.sections 
+     * @param {StatesController} param0.stateController
      */
-    constructor({ sections }) {
+    constructor({ sections, stateController }) {
         /** @type {EventEmitter} */
         this.Events = new EventEmitter();
-        this._Targets = { spiral: sections.spiral, postomat: sections.postomat };
-
-        /*this._Targets = sections.reduce((pr, curr) => {
-            pr[curr] = { name: curr, comQueue: this.#CreateComAsyncQueue() };
-            return pr;
-        }, {});*/
+        this._Sections = sections;
+        this._StateController = stateController;
     }
-
+    /**
+     * @returns {Array<{ topic: string, payload: any }>}
+     */
     get BaseTopics() {
         return [
-            { topic: 'Machine/Sections', payload: this._Targets },
-            // { topic: '' }
+            { topic: 'Machine/Sections', payload: this._Sections },
         ];
     }
 
     /**
      * 
      * @param {object} param0 
-     * @param {import("./HiLvlMessages").Transaction} param0.Transaction
+     * @param {import("./Messages").Transaction} param0.Transaction
+     * @returns {[{ section: import('./Messages').TypeTarget, order: import('./Messages').Order }]}
      */
-    ProcessCommand({ Transaction }) {
+    ProcessTransaction({ Transaction }) {
+        if (!this.GlobalStateAllowsCommand()) return;
         const { ID, Orders, UserID, Source } = Transaction;
-        return Orders
-            .map(_order => ({
-                section: this.GetSectionByTarget(_order.Target), 
-                order: this.ProcessOrder(ID, _order)
-            }))
-            .filter(({ section, order }) => section && order);
-
+        
+        for (const _order of Orders) {
+            const section = this.GetSectionByTarget(_order.Target);
+            if (!section) continue;
+            const sectionState = this._StateController.sections.get(section.name);
+            if (sectionState.IsAvailable != AVAILABLE.YES) continue;
+            const order = this.ProcessOrder(ID, _order)
+        }
+            // .filter(({ section }) => )
         // const section = this.GetSectionByTarget(order.Target);
         // this._Targets[section]?.comQueue.addTask(ID, order);
     }
@@ -54,35 +67,40 @@ class ClassProxySection /*extends EventEmitter*/ {
         let section = this.GetSectionByTarget(Response.Target);
         if (section)
             return { topic: 'Machine/Response', payload: Response };
-
-        /*switch (section.toLowerCase()) {
-            case 'spiral':
-                return { topic: 'Machine/Spiral/Response', payload: response };
-            case 'postomat':
-                return { topic: 'Machine/Postomat/Response', payload: response };
-            default:
-                break;
-        }*/
     }
-
+    
     /**
-     * @param {import("./HiLvlMessages").TypeTarget} tag 
+     * @param {import("./Messages").TypeTarget} tag 
+     * @returns {import("./Messages").TypeTarget | undefined}
      */
     GetSectionByTarget(tag) {
-        return Object.keys(this._Targets).find(section => this._Targets[section].id == tag.id || this._Targets[section].name == tag.name);
-        // return this._Targets[tag.name] ? tag.name : undefined;
+        return this._Sections.find(section => section.id === tag.id || section.name === tag.name);
     }
 
     /**
      * @method
-     * @param {import("./HiLvlMessages").Order} command 
+     * @param {import("./Messages").Order} order 
      */
-    ProcessOrder(id, command) {
+    ProcessOrder(id, order) {
         // TODO: фильтр сообщений для Target
         // let ID = v4();
-        if (command.Command == 'getItem') {
-            return { ID: id, ...command };
+        if (order.Command == COMMANDS.GetItem) {
+            if (!this.IsGetItemOrderValid(order)) return;
+            return { ID: id, ...order };
         }
+    }
+    
+    /**
+     * @method
+     * @param {import("./Messages").Order} order 
+     */
+    IsGetItemOrderValid(order) {
+        if (order.Cells.length == 0) return false;
+        const section = this.GetSectionByTarget(order.Target);
+        if (!section) return false;
+        const sectionState = this._StateController.sections.get(section.name);
+        const hasFaultCells = order.Cells.some(cell => !sectionState.isCellAvailable(cell));
+        return hasFaultCells;
     }
 
     /**
@@ -127,13 +145,14 @@ class ClassProxySection /*extends EventEmitter*/ {
 
     /**
      * 
-     * @param {import("./HiLvlMessages").Transaction} command 
-     * @param {import("./HiLvlMessages").Response} resp 
-     * @returns {import("./HiLvlMessages").Response}
+     * @param {import("./Messages").Transaction} command 
+     * @param {import('./Messages').TypeTarget} Target 
+     * @param {import('./Messages').Cell} Cell 
+     * @returns {import("./Messages").Response}
      */
-    CreateResponse(command, resp) {
-        const ID = 0; //TODO
-        // const Target = 
+    CreateResponse(command, Target, Cell) {
+        const ID = randomUUID();
+        // command.Orders.
         const { ID: ParentID } = command;
         // ParentID
         return {
@@ -141,42 +160,20 @@ class ClassProxySection /*extends EventEmitter*/ {
                 ID,					 // уникальный идентификатор
                 ParentID,			 // идентификатор транзакции, на которую отвечаем
                 Timestamp: new Date().getTime(),  //new Date().toString().slice(0, 33)  // время выполнения транзакции
-                Target: {						// аппарат, которому предоставляется данная транзакция
-                    id: 'GUID',					// идентификатор аппарата
-                    name: 'Machine-1-spiral',	// имя аппарата
-                },
-                Cell: {
-                    row: 2,					 // строка
-                    column: 5,				 // столбец
-                    quantity: 3,				 // количество ТМЦ
-                    itemID: 'GUID'
-                },
-                Result: 'OK',                          // Результат выполнения транзакций
-                Message: 'Transaction successful'      // развернутое сообщение о проведённой транзакции
+                Target: Target,
+                Cell,
+                Result: 'OK',                     
+                Message: 'Transaction successful'     
             }
         }
     }
-    /*
-    #CreateComAsyncQueue() {
-        new Queue({
-            concurrency: 1,
-            wait: Infinity,
-            timeout: 60 * 1000,
-            process: this.ProcessOrder.bind(this),
-            done: (error, task) => {
-                console.log('Done:', { error, task });
-            },
-            success: (task) => {
-                console.log('Success:', { task });
-            },
-            failure: (err, task) => {
-                console.log('Failure:', { err, task });
-            },
-            drain: () => {
-                console.log('Queue drain');
-            },
-        });
-    }*/
+
+    GlobalStateAllowsCommand() {
+        const { MachineState, Env } = this._StateController.global;
+        return MachineState == GLOBAL_MACHINE_STATE.OK
+            && [...Env.values()].some(sensor => sensor.critical && sensor.state != MEAS_STATE.OK);
+            
+    }
 }
 
 module.exports = ClassProxySection;
