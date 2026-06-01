@@ -262,6 +262,7 @@ class ClassSpiralSectionStorage {
 
     /**
      * @method
+     * @description * Инициализирует обработчики событий с тамперов спиралей для определения факта выдачи единицы товара
      */
     InitEventHandlers() {
         /** Tamper trigger handler */
@@ -365,6 +366,12 @@ class ClassSpiralSectionStorage {
         this.#_Events.emit('state', ...args);
     }
 
+    /**
+     * @method
+     * @description Обработчик события выдачи единицы ТМЦ
+     * @param {object} param0
+     * @param {number} param0.index 
+     */
     async OnDispensedSingle({ tamperInd }) {
         console.log(`[STORAGE] Выдана 1 ед. тмц`);
         const indexInUse = this.#_Context.currentOrder.unitIndex;
@@ -393,6 +400,8 @@ class ClassSpiralSectionStorage {
     }
 
     /**
+     * @method
+     * @description Обработчик таймаута выдачи
      * @param {TypeCoords} param0 
      */
     async OnTimeout({ index }) {
@@ -410,6 +419,8 @@ class ClassSpiralSectionStorage {
     }
 
     /**
+     * @method
+     * @description Обработчик ошибок секции
      * @param {StorageFault} fault 
      */
     async OnFault(fault) {
@@ -435,6 +446,10 @@ class ClassSpiralSectionStorage {
         }
     }
 
+    /**
+     * @method
+     * @description Переход в IDLE состояние 
+     */
     async Idle(/*{ index }*/) {
         this.#_Context.fallbackTimer?.clear();
         this.#_Context.dispenseTimer?.clear();
@@ -457,7 +472,8 @@ class ClassSpiralSectionStorage {
     }
 
     /**
-     * 
+     * @method
+     * @description Метод для внешнего вызова выдачи товара из спирального механизма
      * @param {import("./srvSpiralSection").TypeTransactionCell} order
      * 
      * @returns {Promise}
@@ -487,7 +503,7 @@ class ClassSpiralSectionStorage {
 
     /**
      * @method
-     * @description
+     * @description Внутренний метод выдачи товара из спирального механизма, который вызывается FSM при обработке команды на выдачу
      * @param {import("./srvSpiralSection").TypeTransactionCell} order 
      */
     async _Dispense(order) {
@@ -513,6 +529,7 @@ class ClassSpiralSectionStorage {
 
     /**
      * @method
+     * @description Метод для проверки электрического тока в цепи мотора, который может указывать на различные состояния механизма
      * @returns {TypeElectrCurrentState|undefined}
      */
     CheckCurrent() {
@@ -528,11 +545,15 @@ class ClassSpiralSectionStorage {
         }
     }
 
+    /**
+     * 
+     * @param {number} index 
+     * @param {'single' | 'row' | 'col' | 'all'} scope 
+     */
     *UnitsByScope(index, scope) {
         const { row, col } = this.#_Context.units[index].coords;
 
         switch (scope) {
-
             case 'single':
                 yield this.#_Context.units[index];
                 break;
@@ -555,11 +576,14 @@ class ClassSpiralSectionStorage {
     }
 
     /**
-     * 
-     * @param {object} param0
-     * @param {number} param0.dispensed 
-     * @param {string} param0.scope 
+     * @method
+     * @description Метод для обновления контекста секции после попытки выдачи товара, который может обновлять количество отгруженных единиц, статус ячеек и тд в зависимости от переданных параметров
      * @param {string} param0.status 
+     * @param {Object} param1 
+     * @param {number} [param1.dispensed=0] 
+     * @param {string} [param1.scope='single'] 
+     * @param {import("./srvSpiralSectionStates").SpiralCellStateKeys} param1.status 
+     * @param {any[]} [param1.except=[]] 
      */
     UpdateStorageContext({ index }, { dispensed = 0, scope='single', status, except = [] }) {
         if (this.#_Context.currentOrder)
@@ -578,7 +602,8 @@ class ClassSpiralSectionStorage {
 
 
     /**
-     * 
+     * @method
+     * @description Метод для получения информации о ячейке/спирали по ее индексу
      * @param {object} param0
      * @param {number} param0.index - номер ячейки/спирали 
      * @returns {TypeUnit|null}
@@ -592,13 +617,14 @@ class ClassSpiralSectionStorage {
     }
 
     /**
-     * 
+     * @member 
+     * @description Метод для поэтапного включения мотора спирального механизма с проверкой тока и сигналов с тамперов для определения факта начала выдачи товара и исправности механизма
      * @param {number} index 
      * @returns {Promise}
      */
     async MotorOnPhased(index) {
         let step = 1;
-        // let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
 
         await this.MotorStep('On', { index, step });
 
@@ -610,22 +636,23 @@ class ClassSpiralSectionStorage {
             throw new StorageFault({ code: FAULTS.TAMPER_BAD_POS, index, critical: true });
         }
 
-        /*let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (!isWithinTolerance(current_0, current_1, 0.05)) {
             // console.log(`Motor [${index}] error: Source switch broken`);
             throw new StorageFault({ code: FAULTS.IO_PORT_ERR, index, critical: true });
-        }*/
+        }
         step = 2;
         await this.MotorStep('On', { index, step });
 
-        /*let current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        let current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (isWithinTolerance(current_1, current_2, 0.05)) {
             throw new StorageFault({ code: FAULTS.ACTUATOR_NO_POWER, index, critical: false });
-        }*/
+        }
     }
 
     /**
-     * 
+     * @method
+
      * @param {number} index 
      * @param {object} param1 
      * @param {boolean} param1.force
@@ -638,7 +665,8 @@ class ClassSpiralSectionStorage {
     }
 
     /**
-     * 
+     * @method
+     * @description Метод для выполнения этапа включения/выключения мотора
      * @param {string} cmd 
      * @param {object} param1
      * @param {number} param1.index 
@@ -663,28 +691,28 @@ class ClassSpiralSectionStorage {
 
         if (stepResponse?.[0]?.Value?.error) {
             throw new StorageFault({ code: FAULTS.IO_DRIVER_ERR, index, critical: true });
-            // throw new Error(step1Response.Value.error);
         }
     }
 
     /**
-     * 
+     * @method
+     * @description Метод для поэтапного выключения мотора спирального механизма с проверкой тока для определения факта окончания выдачи товара и исправности механизма
      * @param {number} index 
      * @returns {Promise}
      */
     async MotorOffPhased(index) {
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        // let isIdle = current_0 < CURRENT_RANGE.WORK_OK[0]
+        let isIdle = current_0 < CURRENT_RANGE.WORK_OK[0]
         let step = 1;
         await this.MotorStep('Off', { index, step });
         await sleep(50);
 
-        /*let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+        let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (!isIdle && isWithinTolerance(current_0, current_1, 0.05)) {
             // console.log(`Motor [${index} error: Source switch broken`);
             // this.UpdateStorageContext({ index: this.#_Context.currentOrder.unitIndex }, { disable: 'row'})
             throw new StorageFault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index, critical: true });
-        }*/
+        }
 
         step = 2;
         await this.MotorStep('Off', { index, step });
@@ -695,21 +723,31 @@ class ClassSpiralSectionStorage {
     }
 
     /**
-    * Converts a linear index to row and column indices.
-    * @param {number} index The linear index (0-based).
-    * @returns {{row: number, column: number}} An object containing the row and column.
+     * @method
+     * @description Метод для конвертации линейного индекса в индексы строки и столбца
+     * @param {number} index Линейный индекс (0-based).
+     * @returns {{row: number, column: number}} Объект, содержащий строку и столбец.
     */
     IndexToPos(index, _width) {
         let width = _width ?? this.#_Context.cols;
         return { row: Math.floor(index / width), col: index % width };
     }
 
+    /**
+     * @method
+     * @description Метод для конвертации координат ячейки/спирали в ее линейный индекс
+     * @param {object} param0
+     * @param {number} param0.row
+     * @param {number} param0.col    
+     * @returns {number}
+     */
     PosToInd({ row, col }) {
         return (row * this.#_Context.cols) + col;
     }
 
     /**
      * @method
+     * @description Метод для получения уровня (этажа) спирального механизма по индексу ячейки/спирали
      * @param {number} index 
      * @returns {number}
      */
@@ -718,7 +756,8 @@ class ClassSpiralSectionStorage {
     }
 
     /**
-     * 
+     * @method
+     * @description Метод для обновления статуса ячеек в контексте секции в зависимости от типа ошибки, которая произошла при попытке выдачи товара
      * @param {StorageFault} fault 
      */
     UpdateStatus(fault) {
@@ -755,6 +794,10 @@ class ClassSpiralSectionStorage {
         }
     }
 
+    /**
+     * @method
+     * @description Метод для сброса секции в начальное состояние, который может использоваться при инициализации или после устранения ошибки для восстановления работоспособности секции
+     */
     Reset() {
         this.#_FSM.Reset();
         this.#_Context.currentOrder = null;
