@@ -12,37 +12,6 @@ let sleep = require('timers/promises').setTimeout;
 
 const DELAY_BEFORE_DISPENSE = 100;
 
-/** 
- * @typedef {object} TypeProxyCh
- * @property {Function} SetValue
- * @property {Function} GetValue
- * @property {any} Value
- * @property {EventEmitter2} Events
- */
-
-/**
- * @typedef {object} TypeSpiralSectionChannels
- * @property {import('./srvSpiralSectionStorage').TypeSpiralSectionStorageChannels} storageChannels
- * @property {import('./srvSpiralSectionLift').TypeSpiralSectionLiftChannels} liftChannels
- * @property {import('./srvDelieveryBox').TypeDeliveryBoxChannels} boxChannels 
- * @property {string} door
- */
-
-/**
- * @typedef {object} TypeSpiralSectionOpts
- * @property {import('./srvSpiralSectionStorage').TypeSpiralSectionStorageOpts} storageOpts
- * @property {import('./srvSpiralSectionLift').TypeSpiralSectionLiftOpts} liftOpts
- */
-
-/**
- * @typedef TypeSpiralSectionEvents
- * @property {string} DISPENSE_START
- * @property {string} RESPONSE
- * @property {string} OPERATION_FINISHED
- * @property {string} UNLOADING_DONE
- * @property {string} DISPENSE_START_MOCK
- */
-
 class ClassSpiralSection extends EventEmitter2 {
 
     static STATE = {
@@ -57,7 +26,7 @@ class ClassSpiralSection extends EventEmitter2 {
     };
 
     #_ProxyCh;
-    /** @type {TypeSpiralSectionChannels} */
+    /** @type {import("./srvSpiralSection.d.ts").TypeSpiralSectionChannels} */
     #_Channels;
     /**@type {EventEmitter2} */
     #_Events = new EventEmitter2();
@@ -89,10 +58,10 @@ class ClassSpiralSection extends EventEmitter2 {
     /**
      * 
      * @param {object} param0
-     * @param {TypeProxyCh} param0.ProxyCh
-     * @param {TypeSpiralSectionChannels} param0.channels
-     * @param {TypeSpiralSectionOpts} param0.advOpts
-     * @param {BaseSectionState} param0.SectionState
+     * @param {import("./srvSpiralSection.d.ts").TypeProxyCh} param0.ProxyCh
+     * @param {import("./srvSpiralSection.d.ts").TypeSpiralSectionChannels} param0.channels
+     * @param {import("./srvSpiralSection.d.ts").TypeSpiralSectionOpts} param0.advOpts
+     * @param {import("./srvSpiralSection.d.ts").BaseSectionState} param0.SectionState
      */
     constructor({ ProxyCh, channels, advOpts, SectionState }) {
         super();
@@ -109,7 +78,7 @@ class ClassSpiralSection extends EventEmitter2 {
     get InWork() { return this._Context.currentTask; }
 
     /**
-     * @returns {TypeSpiralSectionEvents}
+     * @returns {import("./srvSpiralSection.d.ts").TypeSpiralSectionEvents}
      */
     get EVENTS() {
         return {
@@ -169,8 +138,15 @@ class ClassSpiralSection extends EventEmitter2 {
                 return this.HandleFail(undefined, e, 'Ошибка при установке лифта в положение выдачи');
             }
             for (let level of new Set(orders.map(o => this.#_Storage.MaxLevel - o.row))) {
-                let ordersOnLevel = orders.filter(o => this.#_Storage.MaxLevel - o.row == level)
-                    .filter(o => this.#_Storage.IsSpiralOk(o));
+                let testSpiral = orders.find(o => this.#_Storage.MaxLevel - o.row == level && this.#_Storage.IsCheckable(o));
+                if (!testSpiral) continue;
+                try {
+                    this.#_Storage.TestSpiral(testSpiral);
+                } catch (e) {
+                    continue;
+                }
+                 
+                let ordersOnLevel = orders.filter(o => this.#_Storage.MaxLevel - o.row == level && this.#_Storage.IsOk(o));
 
                 if (ordersOnLevel.length == 0) continue;
 
@@ -185,7 +161,7 @@ class ClassSpiralSection extends EventEmitter2 {
 
                 for (let order of ordersOnLevel) {
                     await sleep(DELAY_BEFORE_DISPENSE);
-                    if (this.#_Storage.IsSpiralOk(order)) {
+                    if (this.#_Storage.IsOk(order)) {
                         console.log(`Order: ${JSON.stringify(order)}`);
                         try {
                             await this.#_Storage.Dispense(order);

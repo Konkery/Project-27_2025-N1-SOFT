@@ -3,12 +3,6 @@ const { ClassFault } = require('./srvUtils');
 const { BOX_CONSTANTS, FAULTS } = require('./SpiralSectionConstants');
 const { default: BaseSectionState } = require("../../srvStatesController/js/srvBaseSectionState");
 
-/**
- * @typedef {object} TypeDeliveryBoxChannels
- * @property {string} lock
- * @property {string} optic
- */
-
 class ClassDeliveryBox {
 
     static STATE = {
@@ -58,14 +52,14 @@ class ClassDeliveryBox {
     };
 
     #_ProxyCh;
-    /** @type {TypeDeliveryBoxChannels} */
+    /** @type {import('./srvSpiralSection').TypeDeliveryBoxChannels} */
     #_Channels = null;
     #_Context = {};
     #_DoorHandlers = new Map();
     /**
      * @param {object} param0
      * @param {TypeProxyCh} param0.ProxyCh
-     * @param {TypeDeliveryBoxChannels} param0.channels 
+     * @param {import('./srvSpiralSection').TypeDeliveryBoxChannels} param0.channels 
      * @param {object} param0.advOpts
      * @param {BaseSectionState} param0.SectionState
      */
