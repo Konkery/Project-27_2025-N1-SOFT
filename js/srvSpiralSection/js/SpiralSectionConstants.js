@@ -19,7 +19,8 @@ function parseValue(_var) {
 }
 
 const STORAGE_CONSTANSTS = {
-    SHORT_CH_VAL: parseValue(process.env.STORAGE_SHORT_CH_VAL),
+    SHORT_CH_VAL: parseValue(process.env.SHORT_CH_VAL),
+    POWER_OFF_CH_VAL: parseValue(process.env.POWER_OFF_CH_VAL),
 
     TAMPER_ON: parseValue(process.env.STORAGE_TAMPER_ON),
     TAMPER_OFF: parseValue(process.env.STORAGE_TAMPER_OFF),
