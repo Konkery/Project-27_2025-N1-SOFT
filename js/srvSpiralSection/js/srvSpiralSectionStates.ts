@@ -1,6 +1,6 @@
 import { BaseSectionState, ISectionParams } from "../../srvStatesController/js/srvBaseSectionState";
 import { CELL_STATE } from "../../srvStatesController/js/srvStates";
-import { IEventStateUpdate } from '../../srvStatesController/js/srvSectionStateController';
+// import { IEventStateUpdate } from '../../srvStatesController/js/srvSectionStateController';
 
 export const SPIRAL_CELL_STATE = {
     ...CELL_STATE,
@@ -22,19 +22,10 @@ export const LIFT_STATE = {
 export type LiftStateKeys = typeof LIFT_STATE[keyof typeof LIFT_STATE];
 
 export class SpiralSectionState extends BaseSectionState<SpiralCellStateKeys> {
-    private liftState: LiftStateKeys;
+    public liftState: LiftStateKeys;
     constructor(config: ISectionParams) {
         super(config);
         this.liftState = LIFT_STATE.OK;
-    }
-
-    getLiftState(): LiftStateKeys {
-        return this.liftState;
-    }
-
-    setLiftState(state: LiftStateKeys) {
-        this.liftState = state;
-        this.emit('update', { path: ['Lift', 'Status'], state } as IEventStateUpdate);
     }
 }
 
