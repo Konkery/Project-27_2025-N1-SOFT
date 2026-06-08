@@ -1,10 +1,10 @@
 'use strict';
 // srvBaseSectionState.ts
 import EventEmitter2 from 'eventemitter2';
-import { IO_PORT_STATE, IO_STATE, CELL_STATE, MEAS_STATE, 
-    IoPortStateKeys, MeasKeys, NetStateKeys, CellStateKeys,
-    AVAILABLE  } from './srvStates';
-import { IEventStateUpdate } from './srvSectionStateController';
+import { IO_PORT_STATE, IO_STATE, CellStateKeys,
+    AVAILABLE, RUNNING, 
+    CELL_STATE} from './srvStates';
+import { ISectionParams } from './srvSectionStateController';
 
 interface TYPE_IO {
     name: string,
@@ -12,31 +12,27 @@ interface TYPE_IO {
     ports: typeof IO_PORT_STATE[keyof typeof IO_PORT_STATE][];
 } 
 
-export interface ISectionParams {
-    name: string,
-    id?: string,
-    module: BaseSectionState;
-    ioList: string[];
-}
 export class BaseSectionState < TCellState extends string = CellStateKeys> extends EventEmitter2 {
 
-    public name: string;
-    public isAvailble: typeof AVAILABLE[keyof typeof AVAILABLE];
-    public rows: string[];
-    public cols: string[];
+    public Name: string;
+    public IsAvailble: typeof AVAILABLE[keyof typeof AVAILABLE];
+    public Running: typeof RUNNING[keyof typeof RUNNING];
+    public Rows: string[];
+    public Cols: string[];
     
-    public cells: TCellState[];
-    public io: Record<string, TYPE_IO>;
+    public Cells: TCellState[];
+    public IO: Record<string, TYPE_IO>;
 
     constructor(config: ISectionParams) {
         super();
-        this.name = config.name;
-        this.isAvailble = AVAILABLE.YES;
-        this.rows = [];
-        this.cols = [];
-        this.cells = [];
+        this.Name = config.Name;
+        this.IsAvailble = AVAILABLE.YES;
+        this.Running = RUNNING.NO;
+        this.Rows = [];
+        this.Cols = [];
+        this.Cells = Array.from({ length: config.Size.rows * config.Size.cols }, () => CELL_STATE.OK as TCellState);
 
-        this.io = config.ioList.reduce((pr, ioName) => {
+        this.IO = (config.IOList ?? []).reduce((pr, ioName) => {
             pr[ioName] = { 
                 state: IO_STATE.OK, 
                 name: ioName, 
@@ -46,38 +42,22 @@ export class BaseSectionState < TCellState extends string = CellStateKeys> exten
         }, {} as Record<string, TYPE_IO>);
     }
 
-    isCellAvailable(index: number) {
-        return this.cells[index] == CELL_STATE.OK 
-            || this.cells[index] == CELL_STATE.OVERLOAD
+    public Reset(): void {
+        this.IsAvailble = AVAILABLE.YES;
+        this.Running = RUNNING.NO;
+        this.Rows = [];
+        this.Cols = [];
+        this.Cells = [];
+
+        for (const ioName of Object.keys(this.IO)) {
+            this.IO[ioName] = {
+                state: IO_STATE.OK,
+                name: ioName,
+                ports: []
+            };
+        }
+        this.Cells = Array.from({ length: this.Cells.length }, () => CELL_STATE.OK as TCellState);
     }
 }
 
 export default BaseSectionState;
-/**
- * @deprecated
- */
-class EnvSensorGroup {
-
-    temp: MeasKeys;
-    hum: MeasKeys;
-
-    constructor() {
-
-        this.temp = MEAS_STATE.OK;
-        this.hum = MEAS_STATE.OK;
-    }
-
-    set Temp(state: MeasKeys) { 
-        this.temp = state; 
-    }
-
-    get Temp() { return this.temp; }
-
-    set Hum(state: MeasKeys) { 
-        this.hum = state; 
-    }
-
-    get Hum() { 
-        return this.hum; 
-    }
-}
