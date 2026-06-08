@@ -11,25 +11,28 @@ function parseRange(json) {
     return obj
 }
 
-function parseValue(_var) {
-    let val = Number(_var);
-    if (isNaN(val)) 
-        throw new Error('Invalid arg')
-    return val
+function parseValue(val, name) {
+    let num = Number(val);
+    if (isNaN(num)) {
+        const errorMsg = `Invalid configuration: Variable "${name}" is expected to be a number, but received ${JSON.stringify(val)} (type: ${typeof val})`;
+        console.error(errorMsg);
+        throw new Error(errorMsg);
+    }
+    return num;
 }
 
 const STORAGE_CONSTANSTS = {
-    SHORT_CH_VAL: parseValue(process.env.SHORT_CH_VAL),
-    POWER_OFF_CH_VAL: parseValue(process.env.POWER_OFF_CH_VAL),
+    SHORT_CH_VAL: parseValue(process.env.SHORT_CH_VAL, 'SHORT_CH_VAL'),
+    POWER_OFF_CH_VAL: parseValue(process.env.POWER_OFF_CH_VAL, 'POWER_OFF_CH_VAL'),
 
-    TAMPER_ON: parseValue(process.env.STORAGE_TAMPER_ON),
-    TAMPER_OFF: parseValue(process.env.STORAGE_TAMPER_OFF),
-    TAMPER_UNDEFINED: parseValue(process.env.STORAGE_TAMPER_UNDEFINED),
+    TAMPER_ON: parseValue(process.env.STORAGE_TAMPER_ON, 'STORAGE_TAMPER_ON'),
+    TAMPER_OFF: parseValue(process.env.STORAGE_TAMPER_OFF, 'STORAGE_TAMPER_OFF'),
+    TAMPER_UNDEFINED: parseValue(process.env.STORAGE_TAMPER_UNDEFINED, 'STORAGE_TAMPER_UNDEFINED'),
 
-    AVG_ROTATION_TIME: parseValue(process.env.STORAGE_AVG_ROTATION_TIME),
-    FULL_ROTATION_TIMEOUT: parseValue(process.env.STORAGE_FULL_ROTATION_TIMEOUT),
+    AVG_ROTATION_TIME: parseValue(process.env.STORAGE_AVG_ROTATION_TIME, 'STORAGE_AVG_ROTATION_TIME'),
+    FULL_ROTATION_TIMEOUT: parseValue(process.env.STORAGE_FULL_ROTATION_TIMEOUT, 'STORAGE_FULL_ROTATION_TIMEOUT'),
 
-    MONITOR_INTERVAL: parseValue(process.env.MONITOR_INTERVAL),
+    MONITOR_INTERVAL: parseValue(process.env.MONITOR_INTERVAL, 'MONITOR_INTERVAL'),
 
     CURRENT_RANGE: parseRange(
         process.env.STORAGE_CURRENT_RANGE
@@ -43,21 +46,21 @@ const STORAGE_CONSTANSTS = {
     }
 }
 const LIFT_CONSTANTS = {
-    LIFT_LEVEL_ON: parseValue(process.env.LIFT_LEVEL_ON),
-    LIFT_LEVEL_OFF: parseValue(process.env.LIFT_LEVEL_OFF),
+    LIFT_LEVEL_ON: parseValue(process.env.LIFT_LEVEL_ON, 'LIFT_LEVEL_ON'),
+    LIFT_LEVEL_OFF: parseValue(process.env.LIFT_LEVEL_OFF, 'LIFT_LEVEL_OFF'),
 
-    LIFT_BOTTOM_TAMPER_ON: parseValue(process.env.LIFT_BOTTOM_TAMPER_ON),
-    LIFT_BOTTOM_TAMPER_OFF: parseValue(process.env.LIFT_BOTTOM_TAMPER_OFF),
-    LIFT_BOTTOM_TAMPER_DEBOUNCE: parseValue(process.env.LIFT_BOTTOM_TAMPER_DEBOUNCE),
+    LIFT_BOTTOM_TAMPER_ON: parseValue(process.env.LIFT_BOTTOM_TAMPER_ON, 'LIFT_BOTTOM_TAMPER_ON'),
+    LIFT_BOTTOM_TAMPER_OFF: parseValue(process.env.LIFT_BOTTOM_TAMPER_OFF, 'LIFT_BOTTOM_TAMPER_OFF'),
+    LIFT_BOTTOM_TAMPER_DEBOUNCE: parseValue(process.env.LIFT_BOTTOM_TAMPER_DEBOUNCE, 'LIFT_BOTTOM_TAMPER_DEBOUNCE'),
 
-    DOUBLE_TRIGGER_WINDOW: parseValue(process.env.LIFT_DOUBLE_TRIGGER_WINDOW),
+    DOUBLE_TRIGGER_WINDOW: parseValue(process.env.LIFT_DOUBLE_TRIGGER_WINDOW, 'LIFT_DOUBLE_TRIGGER_WINDOW'),
 
-    ELEVATE_NEXT_AVG_TIME: parseValue(process.env.LIFT_ELEVATE_NEXT_AVG_TIME),
-    ELEVATE_NEXT_OVERLOAD_TIME: parseValue(process.env.LIFT_ELEVATE_NEXT_OVERLOAD_TIME),
-    ELEVATE_NEXT_MAX_TIME: parseValue(process.env.LIFT_ELEVATE_NEXT_MAX_TIME),
+    ELEVATE_NEXT_AVG_TIME: parseValue(process.env.LIFT_ELEVATE_NEXT_AVG_TIME, 'LIFT_ELEVATE_NEXT_AVG_TIME'),
+    ELEVATE_NEXT_OVERLOAD_TIME: parseValue(process.env.LIFT_ELEVATE_NEXT_OVERLOAD_TIME, 'LIFT_ELEVATE_NEXT_OVERLOAD_TIME'),
+    ELEVATE_NEXT_MAX_TIME: parseValue(process.env.LIFT_ELEVATE_NEXT_MAX_TIME, 'LIFT_ELEVATE_NEXT_MAX_TIME'),
 
-    MOTOR_RES_MAX_TIME: parseValue(process.env.LIFT_MOTOR_RES_MAX_TIME),
-    MONITOR_INTERVAL: parseValue(process.env.MONITOR_INTERVAL),
+    MOTOR_RES_MAX_TIME: parseValue(process.env.LIFT_MOTOR_RES_MAX_TIME, 'LIFT_MOTOR_RES_MAX_TIME'),
+    MONITOR_INTERVAL: parseValue(process.env.MONITOR_INTERVAL, 'MONITOR_INTERVAL'),
 
     CURRENT_RANGE: parseRange(
         process.env.LIFT_CURRENT_RANGE
@@ -72,11 +75,11 @@ const LIFT_CONSTANTS = {
 }
 
 const BOX_CONSTANTS = {
-    OPENED_TIME_SEC: parseValue(process.env.OPENED_TIME_SEC),
-    DOOR_CLOSED: parseValue(process.env.DOOR_CLOSED),
-    BOX_CLOSED:  parseValue(process.env.BOX_CLOSED),
-    UNLOCK_ON: parseValue(process.env.UNLOCK_ON),
-    UNLOCK_OFF: parseValue(process.env.UNLOCK_OFF),
+    OPENED_TIME_SEC: parseValue(process.env.OPENED_TIME_SEC, 'OPENED_TIME_SEC'),
+    DOOR_CLOSED: parseValue(process.env.DOOR_CLOSED, 'DOOR_CLOSED'),
+    BOX_CLOSED:  parseValue(process.env.BOX_CLOSED, 'BOX_CLOSED'),
+    UNLOCK_ON: parseValue(process.env.UNLOCK_ON, 'UNLOCK_ON'),
+    UNLOCK_OFF: parseValue(process.env.UNLOCK_OFF, 'UNLOCK_OFF'),
 }
 
 const FAULTS = {
