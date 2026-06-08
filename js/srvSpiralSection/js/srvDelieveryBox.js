@@ -61,9 +61,9 @@ class ClassDeliveryBox {
      * @param {TypeProxyCh} param0.ProxyCh
      * @param {import('./srvSpiralSection').TypeDeliveryBoxChannels} param0.channels 
      * @param {object} param0.advOpts
-     * @param {BaseSectionState} param0.SectionState
+     * @param {BaseSectionState} param0.sectionState
      */
-    constructor({ ProxyCh, channels, advOpts, SectionState }) {
+    constructor({ ProxyCh, channels, advOpts, sectionState }) {
 
         this.#_ProxyCh = ProxyCh;
 
@@ -71,11 +71,9 @@ class ClassDeliveryBox {
         this.unlockTimeoutMs = advOpts.unlockTimeoutMs ?? 100000;
 
         this.#_FSM = new FSM({
-            defaultState: DeliveryBox.STATE.CLOSED,
+            defaultState: ClassDeliveryBox.STATE.CLOSED,
             stateGraph: this.#_StateGraph
         });
-
-        this.InitSubscriptions();
     }
 
     get IsOpened() {

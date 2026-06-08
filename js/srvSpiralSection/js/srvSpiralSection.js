@@ -7,6 +7,7 @@ const { FAULTS } = require('./SpiralSectionConstants');
 const { default: BaseSectionState } = require("../../srvStatesController/js/srvBaseSectionState");
 const ClassDeliveryBox = require("./srvDelieveryBox");
 const { AVAILABLE } = require("../../srvStatesController/js/srvStates");
+const { default: SpiralSectionState } = require("./srvSpiralSectionStates");
 
 let sleep = require('timers/promises').setTimeout;
 
@@ -16,7 +17,7 @@ class ClassSpiralSection extends EventEmitter2 {
 
     static STATE = {
         IDLE:            'IDLE',
-        DISPENSING:      'COLLECTING',
+        DISPENSING:      'DISPENSING',
         UNLOADING:       'UNLOADING',
     };
 
@@ -40,8 +41,7 @@ class ClassSpiralSection extends EventEmitter2 {
     #_StatesGraph = {
         [ClassSpiralSection.STATE.IDLE]: {
             [this.EVENTS.DISPENSE_START]: { state: ClassSpiralSection.STATE.DISPENSING, action: this._Execute.bind(this) },
-            [this.EVENTS.OPEN_BOX]:       { state: ClassSpiralSection.STATE.UNLOADING,  action: this.OpenBox.bind(this) },
-            [this.EVENTS.DISPENSE_START_MOCK]: { state: ClassSpiralSection.STATE.DISPENSING, action: this._ExecuteMock.bind(this) }
+            // [this.EVENTS.OPEN_BOX]:       { state: ClassSpiralSection.STATE.UNLOADING,  action: this.OpenBox.bind(this) },
         },
         [ClassSpiralSection.STATE.DISPENSING]: {
             [this.EVENTS.OPERATION_FINISHED]:  { state: ClassSpiralSection.STATE.IDLE, action: this.Idle.bind(this) }
@@ -61,17 +61,17 @@ class ClassSpiralSection extends EventEmitter2 {
      * @param {import("./srvSpiralSection.d.ts").TypeProxyCh} param0.ProxyCh
      * @param {import("./srvSpiralSection.d.ts").TypeSpiralSectionChannels} param0.channels
      * @param {import("./srvSpiralSection.d.ts").TypeSpiralSectionOpts} param0.advOpts
-     * @param {import("./srvSpiralSection.d.ts").BaseSectionState} param0.SectionState
+     * @param {SpiralSectionState} param0.sectionState
      */
-    constructor({ ProxyCh, channels, advOpts, SectionState }) {
+    constructor({ ProxyCh, channels, advOpts, sectionState }) {
         super();
         this.#_ProxyCh = ProxyCh;
         this.#_Channels = channels;
-        this.#_Lift = new ClassSpiralSectionLift({ ProxyCh, channels: channels.liftChannels, advOpts: advOpts.liftOpts, SectionState });
-        this.#_Storage = new ClassSpiralSectionStorage({ ProxyCh, channels: channels.storageChannels, advOpts: advOpts.storageOpts, SectionState });
-        this.#_Box = new ClassDeliveryBox({ ProxyCh, channels: channels.boxChannels, advOpts: {}, SectionState });
+        this.#_Lift = new ClassSpiralSectionLift({ ProxyCh, channels: channels.liftChannels, advOpts: advOpts.liftOpts, sectionState });
+        this.#_Storage = new ClassSpiralSectionStorage({ ProxyCh, channels: channels.storageChannels, advOpts: advOpts.storageOpts, sectionState });
+        this.#_Box = new ClassDeliveryBox({ ProxyCh, channels: channels.boxChannels, advOpts: {}, sectionState });
         this.#_Channels.door = channels.door;
-        this.#_SectionState = SectionState;
+        this.#_SectionState = sectionState;
         this.Init();
     }
 

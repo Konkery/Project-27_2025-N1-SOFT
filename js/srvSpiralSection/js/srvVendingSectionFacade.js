@@ -25,17 +25,14 @@ class ClassVendingSectionFacade {
     /**
      * 
      * @param {object} param0
-     * @param {TypeProxyCh} param0.ProxyCh
-     * @param {TypeSpiralSectionChannels} param0.channels
-     * @param {TypeSpiralSectionOpts} param0.advOpts
-     * @param {TypeTransactionTarget} param0.target
-     * @param {BaseSectionState} param0.sectionState
+     * @param {import("./srvSpiralSection").TypeProxyCh} param0.ProxyCh
+     * @param {import("./srvSpiralSection").TypeSpiralSectionOpts} param0.advOpts
+     * @param {import('../../srvProxySection/js/Messages').TypeTarget} param0.target  
      */
     constructor({ section, target, sectionState }) {
         this._Target = target;
         this.#_Section = section; //new ClassSpiralSection({ ProxyCh, channels, advOpts, SectionState });
         this.#_SectionState = sectionState;
-        this.Init();
     }
 
     get Target() { return this._Target; }
@@ -144,4 +141,4 @@ class ClassVendingSectionFacade {
 }
 
 
-module.exports = { ClassVendingSectionFacade };
+exports.default = ClassVendingSectionFacade;

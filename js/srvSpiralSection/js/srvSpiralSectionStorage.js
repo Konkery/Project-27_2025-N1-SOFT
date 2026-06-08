@@ -41,7 +41,7 @@ class ClassSpiralSectionStorage {
         [STATE.IDLE]: {
             [this.EVENTS.DISPENSE_COMMAND]: { state: STATE.DISPENSING, action: this._Dispense.bind(this) },
             [this.EVENTS.FAULT]:            { state: STATE.FAULT,   action: this.OnFault.bind(this) },
-            [this.EVENTS.TEST_COMMAND]:     { state: STATE.TESTING, action: this._Test.bind(this) }
+            [this.EVENTS.TEST_COMMAND]:     { state: STATE.TESTING, action: this._TestSpiral.bind(this) }
         },
         [STATE.DISPENSING]: {
             [this.EVENTS.DISPENSED_SINGLE]: { state: STATE.DISPENSING, action: this.OnDispensedSingle.bind(this) },
@@ -56,7 +56,6 @@ class ClassSpiralSectionStorage {
             [this.EVENTS.TEST_DONE]: { state: STATE.IDLE,  action: this.Idle.bind(this) },
             [this.EVENTS.FAULT]:     { state: STATE.FAULT, action: this.OnFault.bind(this) }
         }
-
     };
     #_FSM = new FSM({ stateGraph: this.#_StatesGraph, onStateChanged: this.OnStateChanged.bind(this), defaultState: ClassSpiralSectionStorage.STATE.IDLE });
     #_Polling = false;
@@ -130,7 +129,7 @@ class ClassSpiralSectionStorage {
      */
     IsOk({ row, column }) {
         const ind = this.PosToInd({ row, col: column });
-        return this.#_SectionState.cells[ind] == CELL_STATE.OK;
+        return this.#_SectionState.Cells[ind] == CELL_STATE.OK;
     }
 
     /**
@@ -142,7 +141,7 @@ class ClassSpiralSectionStorage {
      */
     IsCheckable({ row, column }) {
         const ind = this.PosToInd({ row, col: column });
-        return [CELL_STATE.OK, CELL_STATE.TAMPER_BAD_POS].includes(this.#_SectionState.cells[ind]);
+        return [CELL_STATE.OK, CELL_STATE.TAMPER_BAD_POS].includes(this.#_SectionState.Cells[ind]);
     }
 
     *RowIterator(rowIndex) {
@@ -412,7 +411,7 @@ class ClassSpiralSectionStorage {
                 return rej(new Error('[Storage] Выполняется предыдущая операция'));
             }
             this.#_Context.currentTask = { res, rej };
-            this.#_FSM.Dispatch(this.EVENTS.TEST_SPIRAL_COMMAND, index);
+            this.#_FSM.Dispatch(this.EVENTS.TEST_COMMAND, index);
         });
     }
 
@@ -510,7 +509,7 @@ class ClassSpiralSectionStorage {
             if (status) {
                 if (!except.includes(this.#_Context.units[index].status))
                 unit.status = status;
-                this.#_SectionState.cells[unit.index] = CELL_STATE[status];
+                this.#_SectionState.Cells[unit.index] = CELL_STATE[status];
             }
         }
     }

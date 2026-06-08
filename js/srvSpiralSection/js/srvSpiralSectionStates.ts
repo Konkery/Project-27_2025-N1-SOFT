@@ -1,4 +1,5 @@
-import { BaseSectionState, ISectionParams } from "../../srvStatesController/js/srvBaseSectionState";
+import { BaseSectionState } from "../../srvStatesController/js/srvBaseSectionState";
+import { ISectionParams } from "../../srvStatesController/js/srvSectionStateController";
 import { CELL_STATE } from "../../srvStatesController/js/srvStates";
 // import { IEventStateUpdate } from '../../srvStatesController/js/srvSectionStateController';
 
@@ -22,10 +23,10 @@ export const LIFT_STATE = {
 export type LiftStateKeys = typeof LIFT_STATE[keyof typeof LIFT_STATE];
 
 export class SpiralSectionState extends BaseSectionState<SpiralCellStateKeys> {
-    public liftState: LiftStateKeys;
+    public Lift: LiftStateKeys;
     constructor(config: ISectionParams) {
         super(config);
-        this.liftState = LIFT_STATE.OK;
+        this.Lift = LIFT_STATE.OK;
     }
 }
 

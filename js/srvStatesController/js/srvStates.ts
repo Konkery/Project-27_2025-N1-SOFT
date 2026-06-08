@@ -8,16 +8,13 @@ export const STATE = {
 } as const;
 
 export default STATE;
-
+ 
 export const CELL_STATE = {
     ...STATE,
-
     OVERLOAD: 'OVERLOAD',
-
     TAMPER_ERROR: 'TAMPER_ERROR',
-
     ACTUATOR_SHORT_CIRCUIT: 'ACTUATOR_SHORT_CIRCUIT',
-    ACTUATOR_NO_POWER: 'ACTUATOR_NO_POWER'
+    ACTUATOR_NO_POWER: 'ACTUATOR_NO_POWER',
 } as const;
 
 export type CellStateKeys = typeof CELL_STATE[keyof typeof CELL_STATE];
@@ -43,9 +40,9 @@ export const MEAS_STATE = {
 export type MeasKeys = typeof MEAS_STATE[keyof typeof MEAS_STATE];
 
 export type BUS_STATE = {
-    voltage: MeasKeys,
-    current: MeasKeys,
-    temp: MeasKeys
+    Voltage: MeasKeys,
+    Current: MeasKeys,
+    Temp: MeasKeys
 }
 
 export const GLOBAL_MACHINE_STATE = {
@@ -63,6 +60,11 @@ export const NET_STATE = {
 export type NetStateKeys = typeof NET_STATE[keyof typeof NET_STATE];
 
 export const AVAILABLE = {
+    YES: 'YES',
+    NO: 'NO'
+} as const;
+
+export const RUNNING = {
     YES: 'YES',
     NO: 'NO'
 } as const;
