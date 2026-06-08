@@ -106,7 +106,7 @@ class ClassSpiralSectionLift {
     }
 
     get Status() {
-        return this.#_SectionState.liftState;
+        return this.#_SectionState.Lift;
     }
 
     get Level() {
@@ -229,7 +229,7 @@ class ClassSpiralSectionLift {
         
             switch (currState) {
                 case ELECTR_CURR_STATE.OVERLOAD:
-                    this.#_SectionState.liftState = LIFT_STATE.OVERLOAD;
+                    this.#_SectionState.Lift = LIFT_STATE.OVERLOAD;
                     break;
 
                 case ELECTR_CURR_STATE.IDLE:
@@ -237,7 +237,7 @@ class ClassSpiralSectionLift {
                         noPowerCount++;
                         if (noPowerCount == 2) {
                             this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true }));
-                            this.#_SectionState.liftState = LIFT_STATE.NO_POWER;
+                            this.#_SectionState.Lift = LIFT_STATE.NO_POWER;
                         }
                     }
                     break;
@@ -245,7 +245,7 @@ class ClassSpiralSectionLift {
                 case ELECTR_CURR_STATE.SHORT:
                     console.log(`[LIFT] ${currState}`);
                     console.log(`${this.#_ProxyCh.GetValue(this.#_Channels.current)}`);
-                    this.#_SectionState.liftState = LIFT_STATE.SHORT_CIRCUIT;
+                    this.#_SectionState.Lift = LIFT_STATE.SHORT_CIRCUIT;
                     this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
                     break;
 
@@ -346,20 +346,20 @@ class ClassSpiralSectionLift {
                 } else {
                     console.log(`[LIFT] Lift is stuck`);
                     this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_OVERLOAD, critical: true }));
-                    this.#_SectionState.liftState = LIFT_STATE.OVERLOAD;
+                    this.#_SectionState.Lift = LIFT_STATE.OVERLOAD;
                 }
                 break;
             case ELECTR_CURR_STATE.IDLE:
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true }));
-                this.#_SectionState.liftState = LIFT_STATE.NO_POWER;
+                this.#_SectionState.Lift = LIFT_STATE.NO_POWER;
                 break;
             case ELECTR_CURR_STATE.WORK_OK:
                 // log motor/mech fault
-                this.#_SectionState.liftState = LIFT_STATE.LEVEL_ERROR;
+                this.#_SectionState.Lift = LIFT_STATE.LEVEL_ERROR;
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL, critical: false }));
                 break;
             case ELECTR_CURR_STATE.SHORT:
-                this.#_SectionState.liftState = LIFT_STATE.SHORT_CIRCUIT;
+                this.#_SectionState.Lift = LIFT_STATE.SHORT_CIRCUIT;
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
                 break;
             default:
@@ -376,7 +376,7 @@ class ClassSpiralSectionLift {
             await this.ElevateDown();
             console.log(`ElevateDown()`);
             this.#_Context.timer?.clear();
-            if (this.#_SectionState.liftState != LIFT_STATE.LEVEL_ERROR)
+            if (this.#_SectionState.Lift != LIFT_STATE.LEVEL_ERROR)
                 this.#_Context.timer = createTimer(this.OnTimeout.bind(this), ELEVATE_NEXT_MAX_TIME).set();
 
         } catch (fault) {
@@ -448,26 +448,26 @@ class ClassSpiralSectionLift {
 
         switch (fault.code) {
             case FAULTS.BOTTOM_TAMPER_FAIL:
-                this.#_SectionState.liftState = LIFT_STATE.TAMPER_ERROR;
+                this.#_SectionState.Lift = LIFT_STATE.TAMPER_ERROR;
                 break;
             case FAULTS.IO_DRIVER_ERR:
-                this.#_SectionState.liftState = LIFT_STATE.BLOCKED;
+                this.#_SectionState.Lift = LIFT_STATE.BLOCKED;
                 break;
             case FAULTS.IO_PORT_ERR:
-                this.#_SectionState.liftState = LIFT_STATE.BLOCKED;
+                this.#_SectionState.Lift = LIFT_STATE.BLOCKED;
                 break;
             case FAULTS.LEVEL_SENSOR_FAIL:
                 this.#_Context.currentLevel = undefined;
-                this.#_SectionState.liftState = LIFT_STATE.LEVEL_ERROR;
+                this.#_SectionState.Lift = LIFT_STATE.LEVEL_ERROR;
                 break;
             case FAULTS.LIFT_NO_POWER:
-                this.#_SectionState.liftState = LIFT_STATE.NO_POWER;
+                this.#_SectionState.Lift = LIFT_STATE.NO_POWER;
                 break;
             case FAULTS.LIFT_SHORT_CIRCUIT:
-                this.#_SectionState.liftState = LIFT_STATE.SHORT_CIRCUIT;
+                this.#_SectionState.Lift = LIFT_STATE.SHORT_CIRCUIT;
                 break;
             case FAULTS.LIFT_OVERLOAD:
-                this.#_SectionState.liftState = LIFT_STATE.OVERLOAD;
+                this.#_SectionState.Lift = LIFT_STATE.OVERLOAD;
                 break;
 
             default:
@@ -599,7 +599,7 @@ class ClassSpiralSectionLift {
 
     Reset() {
         this.#_FSM.Reset();
-        this.#_SectionState.liftState = LIFT_STATE.OK;
+        this.#_SectionState.Lift = LIFT_STATE.OK;
         this.#_Context.currentLevel = undefined;
         this.#_Context.requiredLevel = 0;
         this.#_Context.timer?.clear();
