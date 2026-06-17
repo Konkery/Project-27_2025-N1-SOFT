@@ -5,6 +5,7 @@ export interface TypeSpiralSectionLiftChannels {
     liftLevelSensor: string;
     current: string;
     short: string;
+    powerOff: string;
 }
 
 export interface TypeSpiralSectionLiftOpts {
@@ -35,4 +36,5 @@ export interface TypeSpiralSectionLiftContext {
     currentTask: TypeTask;
     timer: import("./srvUtils").TypeTimer;
     fallbackTimer: import("./srvUtils").TypeTimer;
+    movingDir:  -1 | 0 | 1;
 }
