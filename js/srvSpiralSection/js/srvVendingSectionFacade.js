@@ -33,6 +33,9 @@ class ClassVendingSectionFacade {
         this._Target = target;
         this.#_Section = section; //new ClassSpiralSection({ ProxyCh, channels, advOpts, SectionState });
         this.#_SectionState = sectionState;
+        this.#_Section.on('fail', this.HandleFail.bind(this));
+        this.#_Section.on('result', this.OnResult.bind(this));
+        this.#_Section.on('error', this.HandleErr.bind(this));
     }
 
     get Target() { return this._Target; }
@@ -56,6 +59,10 @@ class ClassVendingSectionFacade {
         return (mock ? this._ExecuteMock(Cells) : this.#_Section.Execute(Cells)).finally(() => {
             this._Context.order = null;
         });
+    }
+
+    Invoke(...args) {
+        return this.#_Section.Invoke(...args);
     }
 
     /**
@@ -89,6 +96,7 @@ class ClassVendingSectionFacade {
         this._Context.currentTask?.rej?.(new Error('Reset'));
         this._Context.currentTask = null;
         this._Context.order = null;
+        this.#_Section.Reset();
     }
 
     HandleErr(e, prefixMsg) {
@@ -122,7 +130,7 @@ class ClassVendingSectionFacade {
      */
     async _ExecuteMock(_cells) {
         try {
-            /** @type {[TypeTransactionCell]} */
+            /** @type {[import("./srvSpiralSection").TypeOrder]} */
             const orders = [..._cells];
             for (const order of orders) {
                 for (let i = 0; i < order.quantity; i++) {

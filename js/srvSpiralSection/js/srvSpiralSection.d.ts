@@ -28,3 +28,9 @@ export interface TypeSpiralSectionEvents {
     UNLOADING_DONE: string;
     DISPENSE_START_MOCK: string;
 }
+
+export interface TypeOrder {
+    row: number;
+    column: number;
+    quantity: number;
+}
