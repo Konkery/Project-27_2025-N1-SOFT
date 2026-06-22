@@ -4,8 +4,8 @@ const mqtt = require('mqtt');
 const { BitMask, isWithinTolerance } = require("./srvUtils.js");
 let sleep = require('timers/promises').setTimeout;
 
-const peekValueInRange = ([low, high]) => (low + high) / 2;
-
+const peekValueInRange = ([low, high]) => (low + high) / 10;
+const LOWEST_LEVEL = 0;
 const EVENTS = {
     STOP: 'STOP',
     MOVE: 'MOVE',
@@ -13,6 +13,7 @@ const EVENTS = {
     MOTOR_START: 'ROTATE',
     DISPENSED: 'DISPENSED',
     BOTTOM_TAMPER: 'BOTTOM',
+    TOP_TAMPER: 'TOP',
     CELL_UNLOCKED: 'UNLOCKED'
 }
 
@@ -22,7 +23,7 @@ const TARGET = {
     CELL: 'cell'
 }
 
-async function CreateMQTTConnection (_source) {
+function CreateMQTTConnection (_source) {
     let options = Object.assign({
         port:     _source.Port,
         username: _source.Login,
@@ -32,7 +33,7 @@ async function CreateMQTTConnection (_source) {
     let url = `${options.protocol}://${(_source.IP) ? _source.IP : _source.DN}`;
     let connection = null;
     try {
-        connection = await mqtt.connectAsync(url, options);
+        connection = mqtt.connect(url, options);
     } catch (e) {
         console.log("ошибка подключения к брокеру");
     }
@@ -40,7 +41,7 @@ async function CreateMQTTConnection (_source) {
 }
 
 class DeviceEmulator {
-    constructor({ ProxyCh, channels, advOpts, log }) {
+    constructor({ ProxyCh, channels, driverChannels, log }) {
         this.events = new EventEmitter2();
         /** @type {mqtt.MqttClient} */
         this.mqttC = null
@@ -53,18 +54,14 @@ class DeviceEmulator {
         }
 
         this.faultAdapter = null;
-        this.hbridgeKeys = advOpts.liftOpts.keys;
-        this.hbridgeSource = advOpts.liftOpts.source;
-        this.spiralMatrixRowSource = advOpts.storageOpts.row.source;
-        this.spiralMatrixColSource = advOpts.storageOpts.col.source;
-
-        this.cellMatrixRowSource = advOpts.cellOpts.row.source;
-        this.cellMatrixColSource = advOpts.cellOpts.col.source;
+        this.hbridgeChannels = driverChannels.hbridge;
+        this.matrixRowsChannels = driverChannels.matrix.rows;
+        this.matrixColsChannels = driverChannels.matrix.cols;
 
         this.pollInterval = null;
         this.log = log ?? console.log;
 
-        this.lift = new Lift({ events: this.events, hbridgeKeys: this.hbridgeKeys, log: this.log });
+        this.lift = new Lift({ events: this.events, hbridgeChannels: this.hbridgeChannels, log: this.log });
     
         this.spiralSection = new SpiralSection({ events: this.events, log: this.log, channels: this.ch.storageChannels });
 
@@ -72,7 +69,7 @@ class DeviceEmulator {
     }
 
     async init(mqttOpts, config) {
-        this.mqttC = (await CreateMQTTConnection(mqttOpts)).client;
+        this.mqttC = CreateMQTTConnection(mqttOpts).client;
         this._subscribe();
         this.configureFaults(config);
         this.startPolling();
@@ -155,40 +152,23 @@ class DeviceEmulator {
     }
 
     _subscribe() {
-        const parse = (_topic, _payloadBuffer) => {
-            let value = +_payloadBuffer.toString();
-            let chNum = +_topic.split('/').at(-1);
-            return { value, chNum };
-        }
-        // const confTopic = `/Emulator/conf`;
-        // const prefixTopic = '/Emulator/KC868/';
-        const hbridgeTopic = `/Emulator/KC868/${this.hbridgeSource}/`;
-        const spiralMatrixColTopic = `/Emulator/KC868/${this.spiralMatrixColSource}/`;
-        const spiralMatrixRowTopic = `/Emulator/KC868/${this.spiralMatrixRowSource}/`;
-        const cellMatrixColTopic = `/Emulator/KC868/${this.cellMatrixColSource}/`;
-        const cellMatrixRowTopic = `/Emulator/KC868/${this.cellMatrixRowSource}/`;
-        this.mqttC.subscribe('/Emulator/KC868/#')
+        this.mqttC.subscribe(this.hbridgeChannels);
+        this.mqttC.subscribe(this.matrixColsChannels.concat(this.matrixRowsChannels));
+
         this.mqttC.on('message', (_topic, _payloadBuffer) => {
 
-            if (_topic.startsWith(hbridgeTopic)) {
-                let { value, chNum } = parse(_topic, _payloadBuffer); 
+            const value = +_payloadBuffer.toString();
+            if (this.hbridgeChannels.includes(_topic)) {
+                const chNum = this.hbridgeChannels.indexOf(_topic);
                 this.lift.hbridge.setSwitch(chNum, value);
             }
-            if (_topic.startsWith(spiralMatrixColTopic)) {
-                let { value, chNum } = parse(_topic, _payloadBuffer); 
+            if (this.matrixColsChannels.includes(_topic)) {
+                const chNum = this.matrixColsChannels.indexOf(_topic);
                 this.spiralSection.matrix.setGround(chNum, value);
             }
-            if (_topic.startsWith(spiralMatrixRowTopic)) {
-                let { value, chNum } = parse(_topic, _payloadBuffer); 
+            if (this.matrixRowsChannels.includes(_topic)) {
+                const chNum = this.matrixRowsChannels.indexOf(_topic);
                 this.spiralSection.matrix.setSource(chNum, value);
-            }
-            if (_topic.startsWith(cellMatrixColTopic)) {
-                let { value, chNum } = parse(_topic, _payloadBuffer); 
-                this.cellSection.matrix.setGround(chNum, value);
-            }
-            if (_topic.startsWith(cellMatrixRowTopic)) {
-                let { value, chNum } = parse(_topic, _payloadBuffer); 
-                this.cellSection.matrix.setSource(chNum, value);
             }
             /*if (_topic.startsWith(confTopic)) {
                 this.faultAdapter.
@@ -215,6 +195,7 @@ class Matrix {
     }
 
     setSource(col, val) {
+        console.log(`[EMU] setSource(${col}, ${val})`);
         if (col < 0 || col >= this.cols) throw Error(`Invalid col value`);
         // if (!this.fault.sourceStuckOn[row]) {
         this.sourceState[col] = val ? 1 : 0;
@@ -222,6 +203,7 @@ class Matrix {
     }
     
     setGround(row, val) {
+        console.log(`[EMU] setGround(${row}, ${val})`);
         if (row < 0 || row >= this.rows) throw Error(`Invalid row value`);
         // if (!this.fault.groundStuckOn[row]) {
         this.groundState[row] = val ? 1 : 0;
@@ -401,23 +383,21 @@ class SpiralSection {
 }
 
 class HBridge {
-    constructor({ hbridgeKeys }) {
-        this.hbridgeSwState = { s1: 0, s3: 0, s2: 0, s4: 0 };
-        this.hbridgeKeys = hbridgeKeys;
+    constructor({ hbridgeChannels }) {
+        this.hbridgeSwState = [0, 0, 0, 0];
+        this.hbridgeChannels = hbridgeChannels;
     }
 
     setSwitch(chNum, val) {
-        let sw = Object.keys(this.hbridgeKeys).find(k => this.hbridgeKeys[k]==chNum);
-        // this.log(`[EMU] setSwitch(${chNum}, ${val})`);
-        if (!sw) throw Error(`Invalid chNum`);
-        this.hbridgeSwState[sw] = val;
+        console.log(`[EMU] setSwitch(${chNum}, ${val})`);
+        this.hbridgeSwState[chNum] = val;
         this._recalcHBridge();
     }
 
     _recalcHBridge() {
         let activeCount = 0;
         // Проверка состояний H-моста
-        const { s1, s3, s2, s4 } = this.hbridgeSwState;
+        const [ s1, s2, s3, s4 ] = this.hbridgeSwState;
         // Проверка на ошибку: если одновременно включены s1 и s2
         if (s1 === 1 && s2 === 1) {
             this.onShort();
@@ -453,16 +433,10 @@ class HBridge {
 }
 
 class Lift {
-    constructor({ events, hbridgeKeys, log }) {
+    constructor({ events, hbridgeChannels, log }) {
         this.events = events;
-        this.values = {
-            liftBottomTamper: LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_OFF,
-            liftLevelSensor: LIFT_CONSTANTS.LIFT_LEVEL_ON,
-            current: peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.IDLE),
-            short: 0
-        }
         this.log = log;
-        this.hbridge = new HBridge({ hbridgeKeys });
+        this.hbridge = new HBridge({ hbridgeChannels });
         this.hbridge.onOn = this._startLift.bind(this);
         this.hbridge.onOff = this._stopLift.bind(this);
         this.hbridge.onShort = (() => {
@@ -482,6 +456,14 @@ class Lift {
 
         this.t_level_avg = LIFT_CONSTANTS.ELEVATE_NEXT_AVG_TIME;   // время между уровнями
         this.zeroPulseGap = LIFT_CONSTANTS.DOUBLE_TRIGGER_WINDOW;   // пауза между двойным импульсом на 0 уровне
+        
+        this.values = {
+            liftBottomTamper: this.currentLevel == LOWEST_LEVEL ? LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_ON : LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_OFF,
+            liftTopTamper: LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_OFF,
+            liftLevelSensor: LIFT_CONSTANTS.LIFT_LEVEL_ON,
+            current: peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.IDLE),
+            short: 0
+        }
     }
 
     getState() {
@@ -542,23 +524,26 @@ class Lift {
     _moveStep() {
         if (!this.moving) return;
         this.setOnLevel = false;
+        let timeout = this.t_level_avg;
         if (this.faults.hasFault(FAULTS.LIFT_NO_POWER)) {
             this.values.current = peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.IDLE);
+            console.log(`[LIFT] fault NO_POWER ${this.values.current}`);
             return; // движение отсутствует
-        }
-        let timeout = this.t_level_avg;
-        if (this.faults.hasFault(FAULTS.LIFT_OVERLOAD_1)) {
+        
+        } else if (this.faults.hasFault(FAULTS.LIFT_OVERLOAD_1)) {
             this.values.current = peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.OVERLOAD);
+            console.log(`[LIFT] fault LIFT_OVERLOAD_1 ${this.values.current}`);
             timeout = LIFT_CONSTANTS.ELEVATE_NEXT_OVERLOAD_TIME;
             return; // позиция не меняется
-        }
-
-        if (this.faults.hasFault(FAULTS.LIFT_OVERLOAD_2)) {
+        } else if (this.faults.hasFault(FAULTS.LIFT_OVERLOAD_2)) {
             this.values.current = peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.OVERLOAD);
+            console.log(`[LIFT] fault LIFT_OVERLOAD_2 ${this.values.current}`);
             timeout = LIFT_CONSTANTS.ELEVATE_NEXT_MAX_TIME*1.1;
             return; // позиция не меняется
-        }
+        } 
 
+        // this.values.current = peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.WORK_OK);
+        
         this.liftTimer = setTimeout(async () => {
             this.setOnLevel = true;
             this.currentLevel += this.direction;
@@ -571,8 +556,8 @@ class Lift {
                 return;
             }
 
-            if (this.currentLevel < -1) {
-                this.currentLevel = -1;
+            if (this.currentLevel < LOWEST_LEVEL) {
+                this.currentLevel = LOWEST_LEVEL;
                 return;
             }
             await this._updateLevelSensors();
@@ -598,18 +583,20 @@ class Lift {
 
         if (flag) {
             if (this.faults.hasFault(FAULTS.LIFT_SHORT_CIRCUIT)) {
-                this.values.current = peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.IDLE);   
+                this.values.current = peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.IDLE);  
+                console.log(`[LIFT] fault LIFT_SHORT_CIRCUIT ${this.values.current}`); 
                 this.values.short = STORAGE_CONSTANSTS.SHORT_CH_VAL;
                 this.moving = false;
                 return;     
             }
-            console.log(`[EMU] Ток лифта - рабочий диапазон`);
             this.values.current = peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.WORK_OK);
+            console.log(`[EMU] Ток лифта - рабочий диапазон: ${this.values.current}`);
             this.movingInterval = setInterval(() => {
                 if (!this.setOnLevel && this.moving) {
                     this.emitLiftLevel(LIFT_CONSTANTS.LIFT_LEVEL_OFF);
                     this.emitBottomTamper(LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_OFF);
                 }
+                if (this.currentLevel == LOWEST_LEVEL) this.emitBottomTamper(LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_ON);
             }, 50);
             this.events.emit(EVENTS.MOVE, { direction: this.direction });
         } else {
@@ -620,46 +607,22 @@ class Lift {
     }
 
     async _updateLevelSensors() {
-        // Уровень -1
-        if (this.currentLevel === -1) {
+        // Уровень выдачи
+        if (this.currentLevel === LOWEST_LEVEL) {
             if (this.faults.hasFault(FAULTS.BOTTOM_TAMPER_FAIL)) 
                 return;
             this.emitBottomTamper(LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_ON);
             await sleep(50);
             return;
         }
-
-        // Уровень 0 → двойной импульс
-        /*if (this.currentLevel === 0) {
-            this.emitLiftLevel(LIFT_CONSTANTS.LIFT_LEVEL_ON);
-            // this.log(`[EMU] Двойной импульс - 1-1`);
-
-            let time = performance.now();
-            // this.log(`[EMU] Время между триггерами датчика положения ${time - this.lastLevelEventTime} мс`);
-            this.lastLevelEventTime = time;
-            
-            await sleep(50);
-            // setTimeout(() => {
-            this.emitLiftLevel(LIFT_CONSTANTS.LIFT_LEVEL_OFF);
-            // this.log(`[EMU] Двойной импульс - 1-0`);
-            // }, 50);
-            await sleep(this.zeroPulseGap/2)
-            // this.liftTimer = setTimeout(() => {
-            this.emitLiftLevel(LIFT_CONSTANTS.LIFT_LEVEL_ON);
-            // this.log(`[EMU] Двойной импульс - 2-1`);
-            time = performance.now();
-            // this.log(`[EMU] Время между триггерами датчика положения ${time - this.lastLevelEventTime} мс`);
-            this.lastLevelEventTime = time;
-            await sleep(50);
-            // }, this.zeroPulseGap/2);
-            
-            return;
-        }*/
         // Обычный уровень (1–8)
-        if (this.currentLevel >= 0 && this.currentLevel <= this.topLevel) {
+        if (this.currentLevel > 0 && this.currentLevel <= this.topLevel) {
             this.emitLiftLevel(LIFT_CONSTANTS.LIFT_LEVEL_ON);
             await sleep(50);
-            // this.log(`[EMU] Сигнал уровень лифта - 1`);
+            this.log(`[EMU] Сигнал уровень лифта - ${this.currentLevel}`);
+        }
+        if (this.currentLevel > this.topLevel) {
+            this.emitTopTamper(LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_OFF);
         }
     }
 
@@ -679,6 +642,15 @@ class Lift {
             if (val == LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_ON)
                 this.events.emit(EVENTS.BOTTOM_TAMPER, { value: val });
         }
+    }
+
+    emitTopTamper(val) {
+        // this.log(`[EMU] Сигнал нижнего тампера - ${val}`);
+        // if (!this.faults.hasFault(FAULTS.BOTTOM_TAMPER_FAIL)) {
+            this.values.liftBottomTamper = val;
+            if (val == LIFT_CONSTANTS.LIFT_BOTTOM_TAMPER_ON)
+                this.events.emit(EVENTS.TOP_TAMPER, { value: val });
+        
     }
 }
 
@@ -797,6 +769,21 @@ class FaultBehavior {
     hasFault(fault) {
         return this.faultState.has(fault);
     }
+}
+
+const ACTION = {
+    SET_FAULT: 'setFault',
+    CLEAR_FAULT: 'clearFault'
+}
+
+const TRIGGER_TYPE = {
+    TIME: 'time',
+    DISPENSE_COUNT: 'dispense_count',
+    AFTER_LEVEL: 'after_dispense_level',
+    UNLOCK_COUNT: 'unlock_count',
+    ON_MOVE: 'on_move',
+    CELL_UNLOCKED: 'cell_unlocked',
+    EVENT: 'event',
 }
 
 class FaultAdapter {
@@ -943,7 +930,7 @@ class FaultAdapter {
 
         if (!action || !target) return;
 
-        if (action.type === 'setFault') {
+        if (action.type === ACTION.SET_FAULT) {
 
             if (target === TARGET.SPIRAL) {
                 this.emu.spiralSection.faults.clearAllFaults();
@@ -955,7 +942,7 @@ class FaultAdapter {
             }
         }
 
-        if (action.type === 'clearFault') {
+        if (action.type === ACTION.CLEAR_FAULT) {
 
             if (target === TARGET.CELL) {
                 this.emu.cellSection.faults.clearFault(FAULTS[action.fault]);
