@@ -31,6 +31,8 @@ export interface TypeSpiralSectionUnitEvents {
     RECOVERED: string;
     TEST_COMMAND: string;
     TEST_DONE: string;
+    RUN_MOTOR_COMMAND: string;
+    RUN_MOTOR_DONE: string;
 }
 
 export interface TypeUnit {
@@ -43,14 +45,16 @@ export interface TypeUnit {
     itemsDispensed: number;
     status: string;
     tamperInd: number;
+    isOn: boolean;
 }
 
 type TypeUnits = Object<string, TypeUnit>;
 
-export interface TypeOrder {
+export interface TypeOrderContext {
     unitIndex: number;
     itemsRequested: number;
     itemsDispensed: number;
+    test: boolean;
 }
 
 export interface TypeTask {
@@ -59,7 +63,7 @@ export interface TypeTask {
 }
 
 export interface TypeSpiralSectionUnitContext {
-    currentOrder: TypeOrder | null;
+    currentOrder: TypeOrderContext | null;
     currentTask: TypeTask;
     rows: number;
     cols: number;
