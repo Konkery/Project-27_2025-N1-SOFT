@@ -6,6 +6,7 @@ export class MqttPortService extends EventEmitter2 implements IPortService {
     private client: mqtt.MqttClient | null = null;
     private brokerUrl: string;
     private clientId: string;
+    private publishedTopics: Set<string> = new Set();
 
     constructor(brokerUrl: string, clientId: string) {
         super();
@@ -40,10 +41,23 @@ export class MqttPortService extends EventEmitter2 implements IPortService {
 
     Pub(topic: string, state: string): void {
         if (this.client && this.client.connected) {
+            this.publishedTopics.add(topic);
             this.client.publish(topic, state, { 
                 qos: 1, 
                 retain: true // Сохранять последнее сообщение на брокере,
             });
+        }
+    }
+
+    ClearRetained(): void {
+        if (this.client && this.client.connected) {
+            for (const topic of this.publishedTopics) {
+                this.client.publish(topic, '', { 
+                    qos: 1, 
+                    retain: true 
+                });
+            }
+            this.publishedTopics.clear();
         }
     }
 
