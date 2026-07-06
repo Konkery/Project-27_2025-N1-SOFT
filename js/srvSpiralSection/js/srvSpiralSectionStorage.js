@@ -5,15 +5,15 @@ const { STORAGE_CONSTANSTS, FAULTS, U_TRANSACTIONS } = require("./SpiralSectionC
 const { CELL_STATE } = require("../../srvStatesController/js/srvStates");
 const { default: SpiralSectionState } = require("./srvSpiralSectionStates");
 const { default: StatesController } = require("../../srvStatesController/js/srvSectionStateController");
-const STATUS_EXCEPT = [CELL_STATE.ACTUATOR_NO_POWER, CELL_STATE.ACTUATOR_SHORT_CIRCUIT, CELL_STATE.TAMPER_ERROR];
+const STATUS_EXCEPT = [CELL_STATE.ACTUATOR_NO_POWER, CELL_STATE.ACTUATOR_SHORT_CIRCUIT, CELL_STATE.ERR_TAMPER];
 const ClassBuffer = require('../../../../HorizonServer/js/srvUtils/js/buffer');
 
-const MOTOR_RES_MAX_TIME = 20000;
-const TIME_BETWEEN_STEPS = 80;
+const MOTOR_RES_MAX_TIME = 500;
+const TIME_BETWEEN_STEPS = 200;
 
 let sleep = require('timers/promises').setTimeout;
 
-const { ELECTR_CURR_STATE, TAMPER_ON, TAMPER_OFF, CURRENT_RANGE, FULL_ROTATION_TIMEOUT, MONITOR_INTERVAL } = STORAGE_CONSTANSTS;
+const { ELECTR_CURR_STATE, TAMPER_ON, TAMPER_OFF, CURRENT_RANGE, FULL_ROTATION_TIMEOUT, MONITOR_INTERVAL, TAMPER_DEBOUNCE } = STORAGE_CONSTANSTS;
 const STATE = {
     IDLE: 'IDLE',
     DISPENSING: 'COLLECTING ',
@@ -34,7 +34,7 @@ class ClassSpiralSectionStorage {
     #_GlobalState = null;
     /** @type {SpiralSectionState} */
     #_SectionState = null;
-    /** @type {import("./srvSpiralSectionStorage").TypeSpiralSectionUnitContext} */
+    /** @type {import("./srvSpiralSectionStorage").TypeSpiralSectionContext} */
     #_Context = {};
     /**@type {EventEmitter2} */
     #_Events = new EventEmitter2();
@@ -66,7 +66,7 @@ class ClassSpiralSectionStorage {
     };
     #_FSM = new FSM({ stateGraph: this.#_StatesGraph, onStateChanged: this.OnStateChanged.bind(this), defaultState: ClassSpiralSectionStorage.STATE.IDLE });
     #_Polling = false;
-    #_CurrentWatch = null;
+    #_PSUWatch = null;
     #_TamperPosWatch = null;
     #_ChHandlers = new Map();
     /**
@@ -98,7 +98,8 @@ class ClassSpiralSectionStorage {
                 status: CELL_STATE.OK
             }))
         };
-        this._CurrBuffer = new ClassBuffer({ size: 2 });
+        this._I_CurrBuffer = new ClassBuffer({ size: 2 });
+        this._V_VoltBuffer = new ClassBuffer({ size: 2 });
         this.Init();
     }
 
@@ -137,9 +138,9 @@ class ClassSpiralSectionStorage {
      * @param {number} param0.column 
      * @returns {boolean}
      */
-    IsOk({ row, column }) {
+    IsAvailable({ row, column }) {
         const ind = this.PosToInd({ row, col: column });
-        return this.#_SectionState.Cells[ind] == CELL_STATE.OK;
+        return [CELL_STATE.OK, CELL_STATE.ERR_TAMPER, CELL_STATE.ACTUATOR_NO_POWER].includes(this.#_SectionState.Cells[ind]);
     }
 
     /**
@@ -150,8 +151,10 @@ class ClassSpiralSectionStorage {
      * @returns {boolean}
      */
     IsCheckable({ row, column }) {
+        if (this.#_Context.units.some(u => u.status == CELL_STATE.ACTUATOR_SHORT_CIRCUIT))
+            return false;
         const ind = this.PosToInd({ row, col: column });
-        return [CELL_STATE.OK, CELL_STATE.TAMPER_BAD_POS].includes(this.#_SectionState.Cells[ind]);
+        return [CELL_STATE.OK, CELL_STATE.ERR_TAMPER_BAD_POS, CELL_STATE.ACTUATOR_NO_POWER].includes(this.#_SectionState.Cells[ind]);
     }
 
     *RowIterator(rowIndex) {
@@ -201,6 +204,7 @@ class ClassSpiralSectionStorage {
     InitEventHandlers() {
         this.SetTamperHandlers();
         this.SetCurrentHandler();
+        this.SetVoltageHandler();
     }
 
     /**
@@ -227,51 +231,66 @@ class ClassSpiralSectionStorage {
 
     SetCurrentHandler() {
         const I_currEventName = `${this.#_Channels.current}-value`;
-        const I_currHandler = (({ Value }) => this._CurrBuffer.push(Value)).bind(this);
+        const I_currHandler = (({ Value }) => this._I_CurrBuffer.push(Value)).bind(this);
 
         this.#_ProxyCh.Events.on(I_currEventName, I_currHandler);
         this.#_ChHandlers.set(I_currEventName, I_currHandler);
     }
 
-    StartCurrentWatch() {
-        if (this.#_CurrentWatch) clearInterval(this.#_CurrentWatch);
+    SetVoltageHandler() {
+        const V_voltEventName = `${this.#_Channels.voltage}-value`;
+        const V_voltHandler = (({ Value }) => this._V_VoltBuffer.push(Value)).bind(this);
 
-        this.#_CurrentWatch = setInterval(() => {
-            try {
-                let currState = this.CheckCurrentState(this._CurrBuffer.Filter());
+        this.#_ProxyCh.Events.on(V_voltEventName, V_voltHandler);
+        this.#_ChHandlers.set(V_voltEventName, V_voltHandler);
+    }
 
-                let index = this.#_Context.currentOrder?.unitIndex;
-                const dispensing = this.State == ClassSpiralSectionStorage.STATE.DISPENSING;
-                switch (currState) {
-                    case ELECTR_CURR_STATE.SHORT:
-                        if (this.#_Context.units[index].status != CELL_STATE.ACTUATOR_SHORT_CIRCUIT) {
-                            this.#_Context.units[index].status = CELL_STATE.ACTUATOR_SHORT_CIRCUIT;
-                            this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index }));
-                        }
-                        break;
+    /**              
+     * | Current (I)   | IDLE | DISPENSING |
+     * | ------------- | ---- | ---------- |
+     * |   IDLE        |  -   |  NO POWER  |
+     * |   WORK OK     |  -   |  OK        |
+     * |   OVERLOAD    |  -   |  OVERLOAD  |
+     * |   SHORT       |  -   |  SHORT     |
+     * 
+     */
+    StartPSUWatch() {
+        if (this.#_PSUWatch) clearInterval(this.#_PSUWatch);
 
-                    case ELECTR_CURR_STATE.OVERLOAD:
-                        if (this.#_Context.units[index].status == CELL_STATE.OK)
-                            this.#_Context.units[index].status = CELL_STATE.OVERLOAD;
+        this.#_PSUWatch = setInterval(() => {
+            if (this.State != ClassSpiralSectionStorage.STATE.DISPENSING) return;
 
-                    case ELECTR_CURR_STATE.IDLE:
-                        if (dispensing) {
-                            // if (short) {}
-                            this.#_Context.units[index].status = CELL_STATE.ACTUATOR_NO_POWER;
-                            this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_NO_POWER, index }));
-                            //todo maybe add debounce
-                        
-                        } else {
-                            if (this.#_Context.units[index].status == CELL_STATE.OVERLOAD)
-                                this.#_Context.units[index].status = CELL_STATE.OK;
-                        }
-                        break;
-                    default:
-                        break;
+            let I_currState = this.#_ProxyCh.GetValue(this.#_Channels.short) == STORAGE_CONSTANSTS.SHORT_CH_VAL 
+                            ? ELECTR_CURR_STATE.SHORT 
+                            : this.CheckCurrentState(this._I_CurrBuffer.Filter());
+
+            let index = this.#_Context.currentOrder?.unitIndex;
+
+            switch (I_currState) {
+                case ELECTR_CURR_STATE.SHORT:
+                    if (this.#_SectionState.Cells[index] != CELL_STATE.ACTUATOR_SHORT_CIRCUIT) {
+                        this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index }));
+                    }
+                    break;
+
+                case ELECTR_CURR_STATE.OVERLOAD:
+                    if (this.#_SectionState.Cells[index] == CELL_STATE.OK)
+                        this.#_SectionState.Cells[index] = CELL_STATE.OVERLOAD_I;
+                    break;
+
+                case ELECTR_CURR_STATE.IDLE:
+                    if (this.#_SectionState.Cells[index] != CELL_STATE.ACTUATOR_NO_POWER) 
+                        this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_NO_POWER, index }));
+                    break;
+
+                case ELECTR_CURR_STATE.WORK_OK:
+                    this.#_SectionState.Cells[index] = CELL_STATE.OK;
                 }
-            } catch {
 
-            }
+            const V_voltage = this._V_VoltBuffer.Filter();
+            
+            // TODO: контроль заниженного напряжения
+
         }, MONITOR_INTERVAL);
     }
 
@@ -324,13 +343,13 @@ class ClassSpiralSectionStorage {
         this.#_Polling = false;
         this.#_Context.dispenseTimer?.clear();
         console.log(`[STORAGE] Сброс таймера (2)`);
-        this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.TAMPER_ERROR, index, critical: false }));
+        this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ERR_TAMPER, index, critical: false }));
     }
 
-    OnCompleted(/*{ index, itemsDispensed, error }*/) {
-        // TODO log
-        this.Idle();
-    }
+    // OnCompleted(/*{ index, itemsDispensed, error }*/) {
+    //     // TODO log
+    //     this.Idle();
+    // }
 
     /**
      * @method
@@ -344,8 +363,9 @@ class ClassSpiralSectionStorage {
             if (this.#_Context.currentOrder) {
                 const { unitIndex } = this.#_Context.currentOrder;
                 const { row, col: column } = this.#_Context.units[unitIndex].coords;
-                this.#_Events.emit('fail', { row, column, quantity: 0 }, fault);
-                await this.MotorOff(unitIndex, { force: true });
+                this.#_Events.emit('fail', { row, column }, fault);
+                if (fault.code != FAULTS.IO_TIMEOUT)
+                    await this.MotorOff(unitIndex, { force: true });
             }
 
             this.#_FSM.Dispatch(this.EVENTS.RECOVERED);
@@ -368,14 +388,17 @@ class ClassSpiralSectionStorage {
     async Idle(/*{ index }*/) {
         this.#_Context.fallbackTimer?.clear();
         this.#_Context.dispenseTimer?.clear();
-        let unit = this.#_Context.units.find(u => u.isOn);
-        let index = unit.index;
-        // const index = this.#_Context.currentOrder.unitIndex;
-        console.log(`[STORAGE] Idle({ index: ${index} })`);
+        // let unit = this.#_Context.units.find(u => u.isOn);
+        // let index = unit?.index;
+        const index = this.#_Context.currentOrder?.unitIndex;
         try {
-            if (typeof index == 'number')
+            if (typeof index == 'number') {
+                console.log(`[STORAGE] Idle({ index: ${index} })`);
                 await this.MotorOff(index, { force: true });
-            unit.isOn = false;
+                // unit.isOn = false;
+            } else {
+                console.log(`[STORAGE] Index is not found`);
+            }
             this.#_Context.currentTask?.res?.();
             this.#_Context.currentTask = null;
             this.#_Context.currentOrder = null;
@@ -394,13 +417,13 @@ class ClassSpiralSectionStorage {
      * @method
      * @description Метод для внешнего вызова выдачи товара из спирального механизма
      * @param {import("./srvSpiralSection").TypeOrder} order
-     * @param {boolean} [test=false] 
+     * @param {boolean} [manual=false] 
      * @returns {Promise}
      */
-    async Dispense(order, test=false) {
+    async Dispense(order, manual=false) {
         return new Promise((res, rej) => {
             const index = this.PosToInd({ row: order.row, col: order.column });
-            if (index > this.#_Context.units.length || (order.quantity < 1))
+            if (index > this.#_Context.units.length || typeof order.quantity != 'number' || order.quantity < 1)
                 return rej(new Error('[Storage] Невалидные параметры'));
 
             /*let state = this.CheckCurrent();
@@ -411,34 +434,40 @@ class ClassSpiralSectionStorage {
                 return rej(new Error('[Storage] Выполняется предыдущая операция'));
             }
             this.#_Context.currentTask = { res, rej };
-            const MAX_TIME = order.quantity * STORAGE_CONSTANSTS.FULL_ROTATION_TIMEOUT * 1.5;
+            this.#_Context.currentOrder = {
+                unitIndex: index,
+                itemsRequested: order.quantity,
+                itemsDispensed: 0,
+                manual
+            };
+            const MAX_TIME = order.quantity * STORAGE_CONSTANSTS.FULL_ROTATION_TIMEOUT * 2;
             this.#_Context.fallbackTimer = createTimer(
                 () => this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.NONE })),
                 MAX_TIME).set();
 
-            this.#_FSM.Dispatch(this.EVENTS.DISPENSE_COMMAND, order);
+            this.#_FSM.Dispatch(this.EVENTS.DISPENSE_COMMAND, order, manual);
         });
     }
 
     /**
      * @method
      * @description Метод для внешнего вызова проверки спирали
-     * @param {number} index 
+     * @param {import("./srvSpiralSection").TypeOrder} order
      * @returns 
      */
-    async TestSpiral(index) {
+    async TestSpiral(order) {
         return new Promise((res, rej) => {
             if (this.#_Context.currentTask) {
                 return rej(new Error('[Storage] Выполняется предыдущая операция'));
             }
-
+            const index = this.PosToInd(order);
             this.#_Context.currentOrder = {
                 unitIndex: index,
                 itemsRequested: 0,
                 itemsDispensed: 0,
             };
             this.#_Context.currentTask = { res, rej };
-            this.#_FSM.Dispatch(this.EVENTS.TEST_COMMAND, index);
+            this.#_FSM.Dispatch(this.EVENTS.TEST_COMMAND, order);
         });
     }
 
@@ -448,13 +477,13 @@ class ClassSpiralSectionStorage {
      * @param {object} param0 
      * @param {number} param0.row 
      * @param {number} param0.column
-     * @param {number} duration Время вращения в миллисекундах
+     * @param {number} param0.duration Время вращения в миллисекундах
      * @returns {Promise}
      */
-    async RunMotor({ row, column }, duration) {
+    async RunMotor({ row, column, duration }) {
         return new Promise((res, rej) => {
             const index = this.PosToInd({ row, col: column });
-            if (index >= this.#_Context.units.length || duration <= 0)
+            if (index >= this.#_Context.units.length || typeof duration != 'number' || duration <= 0)
                 return rej(new Error('[Storage] Невалидные параметры'));
 
             if (this.#_Context.currentTask) {
@@ -462,7 +491,8 @@ class ClassSpiralSectionStorage {
             }
 
             this.#_Context.currentTask = { res, rej };
-            this.#_FSM.Dispatch(this.EVENTS.RUN_MOTOR_COMMAND, { index, duration });
+            this.#_Context.currentOrder = { unitIndex: index, manual: true };
+            this.#_FSM.Dispatch(this.EVENTS.RUN_MOTOR_COMMAND, { row, column, duration });
         });
     }
 
@@ -470,24 +500,20 @@ class ClassSpiralSectionStorage {
      * @method
      * @description Внутренний метод выдачи товара из спирального механизма, который вызывается FSM при обработке команды на выдачу
      * @param {import("./srvSpiralSection").TypeOrder} order 
-     * @param {boolean} [test=false] 
+     * @param {boolean} [manual=false] 
      */
-    async _Dispense(order, test=false) {
+    async _Dispense(order, manual=false) {
         const index = this.PosToInd({ row: order.row, col: order.column });
-        this.#_Context.currentOrder = {
-            unitIndex: index,
-            itemsRequested: order.quantity,
-            itemsDispensed: 0,
-            test
-        };
 
         const onTimeout = (() => this.#_FSM.Dispatch(this.EVENTS.ROTATE_TIMEOUT, { index })).bind(this);
-        this.#_Context.dispenseTimer = createTimer(onTimeout, FULL_ROTATION_TIMEOUT).set();
+        this.#_Context.dispenseTimer = createTimer(onTimeout, FULL_ROTATION_TIMEOUT-TIME_BETWEEN_STEPS).set();
 
         try {
             await this.MotorOnPhased(index);
             console.log(`[STORAGE] Включен мотор`);
-            this.#_Polling = true;
+            setTimeout(() => {
+                this.#_Polling = true;
+            }, manual ? 0 : TAMPER_DEBOUNCE);
         } catch (fault) {
             console.log(`[STORAGE] Ошибка при включении мотора: ${JSON.stringify(fault)}`);
             this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
@@ -503,14 +529,16 @@ class ClassSpiralSectionStorage {
      * @param {number} param0.duration
      */
     async _RunMotor({ row, column, duration }) {
-        console.log(`_RunMotor(${index}, ${duration}ms)`);
+        debugger
         const index = this.PosToInd({ row, col: column });
+        
+        console.log(`_RunMotor(${index}, ${duration}ms)`);
         const onTimeout = (() => this.#_FSM.Dispatch(this.EVENTS.RUN_MOTOR_DONE)).bind(this);
-        this.#_Context.dispenseTimer = createTimer(onTimeout, Math.max(duration-TIME_BETWEEN_STEPS, 0)).set();
 
         try {
             await this.MotorOnPhased(index);
-            
+            this.#_Context.dispenseTimer = createTimer(onTimeout, Math.max(duration-2*TIME_BETWEEN_STEPS, 0)).set();
+
             console.log(`[STORAGE] Включен мотор на ${duration}мс`);
         } catch (fault) {
             console.log(`[STORAGE] Ошибка при включении мотора по времени: ${JSON.stringify(fault)}`);
@@ -569,7 +597,6 @@ class ClassSpiralSectionStorage {
     /**
      * @method
      * @description Метод для обновления контекста секции после попытки выдачи товара, который может обновлять количество отгруженных единиц, статус ячеек и тд в зависимости от переданных параметров
-     * @param {string} param0.status 
      * @param {Object} param1 
      * @param {number} [param1.dispensed=0] 
      * @param {string} [param1.scope='single'] 
@@ -584,9 +611,10 @@ class ClassSpiralSectionStorage {
             unit.itemsDispensed += dispensed;
 
             if (status) {
-                if (!except.includes(this.#_Context.units[index].status))
+                if (!except.includes(this.#_SectionState.Cells[index]))
                 unit.status = status;
-                this.#_SectionState.Cells[unit.index] = CELL_STATE[status];
+                this.#_SectionState.Cells[unit.index] = status;
+                this.#_Context.units[unit.index].status = status;
             }
         }
     }
@@ -600,7 +628,7 @@ class ClassSpiralSectionStorage {
      * @returns {TypeUnit|null}
      */
     GetStorageInfo({ index }) {
-        return { ...this.#_Context.units[index] };
+        return { ...this.#_SectionState.Cells[index] };
     }
 
     SetOutOfService() {
@@ -614,10 +642,11 @@ class ClassSpiralSectionStorage {
      * @returns {Promise}
      */
     async MotorOnPhased(index) {
+        debugger;
         const { row } = this.IndexToPos(index);
         let step = 1;
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        this.#_Context.units[index].isOn = true;
+        // this.#_Context.units[index].isOn = true;
         this.#_uTransactionsList.push(U_TRANSACTIONS.ACTUATOR_CONNECT_GND);
         await this.MotorStep('On', { index, step });
 
@@ -634,7 +663,7 @@ class ClassSpiralSectionStorage {
             console.log(`[STORAGE] index ${index} error: Source switch broken`);
             throw new StorageFault({ code: FAULTS.IO_PORT_ERR, index });
         }
-        if (tamperValue !== TAMPER_ON) {
+        if (!this.#_Context.currentOrder.manual && tamperValue !== TAMPER_ON) {
             console.log(`[STORAGE] Ряд ${row} блокируется из за сигнала ${tamperValue} на тампере (строка ${row})`);
             throw new StorageFault({ code: FAULTS.TAMPER_BAD_POS, index });
         }
@@ -650,20 +679,6 @@ class ClassSpiralSectionStorage {
             throw new StorageFault({ code: FAULTS.ACTUATOR_NO_POWER, index, critical: false });
         }
     } 
-
-    /**
-     * @method
-
-     * @param {number} index 
-     * @param {object} param1 
-     * @param {boolean} param1.force
-     * @returns {Promise}
-     */
-    async MotorOff(index, param1) {
-        let { force } = param1 ?? {};
-        // return force ? this.MotorStep('Off', { index, step: undefined }) : this.MotorOffPhased(index);
-        return this.MotorOffPhased(index);
-    }
 
     /**
      * @method
@@ -704,7 +719,7 @@ class ClassSpiralSectionStorage {
      */
     async _TestSpiral({ row, column}) {
         const index = this.PosToInd({ row, col: column });
-        this.#_Context.units[index].isOn = true;
+        // this.#_Context.units[index].isOn = true;
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         try {
             await this.MotorStep('On', { index, step: 1 });
@@ -743,7 +758,7 @@ class ClassSpiralSectionStorage {
      * @param {number} index 
      * @returns {Promise}
      */
-    async MotorOffPhased(index) {
+    async MotorOff(index) {
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         let isIdle = current_0 < CURRENT_RANGE.WORK_OK[0]
         let step = 1;
@@ -794,8 +809,8 @@ class ClassSpiralSectionStorage {
      * @param {number} param0.col    
      * @returns {number}
      */
-    PosToInd({ row, col }) {
-        return (row * this.#_Context.cols) + col;
+    PosToInd({ row, col, column }) {
+        return (row * this.#_Context.cols) + (col ?? column);
     }
 
     /**
@@ -819,8 +834,8 @@ class ClassSpiralSectionStorage {
         if (typeof index != 'number') return;
 
         switch (fault.code) {
-            case FAULTS.TAMPER_ERROR:
-                this.UpdateStorageContext({ index }, { scope: 'single', status: CELL_STATE.TAMPER_ERROR });
+            case FAULTS.ERR_TAMPER:
+                this.UpdateStorageContext({ index }, { scope: 'single', status: CELL_STATE.ERR_TAMPER });
                 break;
 
             case FAULTS.TAMPER_BAD_POS:
@@ -860,8 +875,8 @@ class ClassSpiralSectionStorage {
         if (this.#_TamperPosWatch) clearInterval(this.#_TamperPosWatch);
         this.#_TamperPosWatch = null;
 
-        if (this.#_CurrentWatch) clearInterval(this.#_CurrentWatch);
-        this.#_CurrentWatch = null;
+        if (this.#_PSUWatch) clearInterval(this.#_PSUWatch);
+        this.#_PSUWatch = null;
 
         for (let [eventName, handler] of this.#_ChHandlers) 
             if (eventName && handler) this.#_ProxyCh.Events.off(eventName, handler);
