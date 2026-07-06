@@ -15,7 +15,7 @@ const { LIFT_BOTTOM_TAMPER_ON,
     MONITOR_INTERVAL } = LIFT_CONSTANTS;
 
 const BOTTOM_LEVEL = 0;
-const SLEEP_BETWEEN_STEPS = 100;
+const SLEEP_BETWEEN_STEPS = 250;
 
 class ClassSpiralSectionLift {
     static STATE = {
@@ -37,6 +37,7 @@ class ClassSpiralSectionLift {
     #_Context = {
         currentLevel: undefined,
         requiredLevel: undefined,
+        motorTransition: false,
         movingDir: 0
     };
     #_CurrentWatch = null;
@@ -68,7 +69,7 @@ class ClassSpiralSectionLift {
     #_ChHandlers = new Map();
     #_LevelHandler = null;
     #_LevelCachedValue = undefined;
-
+    #_PSUWatch = null;
     /**
      * 
      * @param {object} param0
@@ -83,7 +84,9 @@ class ClassSpiralSectionLift {
         this.#_GlobalState = globalState;
         this.#_SectionState = sectionState;
         this._BusNumber = advOpts.busNumber;
-        this._CurrBuffer = new ClassBuffer({ size: 2 });
+        this._I_CurrBuffer = new ClassBuffer({ size: 3 });
+        this._V_VoltBuffer = new ClassBuffer({ size: 2 });
+
         this.Init();
     }
 
@@ -101,6 +104,7 @@ class ClassSpiralSectionLift {
             ELEVATE_COMMAND:        'ELEVATE_COMMAND',
             ELEVATE_TIMEOUT:        'ELEVATE_TIMEOUT',
             FAULT:                  'FAULT',
+            RECOVERED:              'RECOVERED',
         });
     }
 
@@ -118,8 +122,8 @@ class ClassSpiralSectionLift {
 
     get MotorOk() {
         return this.Status == LIFT_STATE.OK || 
-            this.Status == LIFT_STATE.TAMPER_ERROR || 
-            this.Status == LIFT_STATE.LEVEL_ERROR || 
+            this.Status == LIFT_STATE.ERR_TAMPER || 
+            this.Status == LIFT_STATE.ERR_LEVEL || 
             this.Status == LIFT_STATE.OVERLOAD 
     } 
 
@@ -130,7 +134,7 @@ class ClassSpiralSectionLift {
 
     Init() {
         this.InitEventHandlers();
-        // this.Stop({ force: true }).catch(e => console.log('[LIFT] Не удалось выполнить reset мотора', e));
+        this.Stop().catch(e => console.log('[LIFT] Не удалось выполнить reset мотора', e));
     }
 
     InitEventHandlers() {
@@ -138,7 +142,7 @@ class ClassSpiralSectionLift {
         this.SetLevelHandler();
         this.SetTopTamperHandler();
         this.SetCurrentHandler();
-        // this.StartCurrentWatch();
+        this.StartPSUWatch();
     }
 
     SetBottomTamperHandler() {
@@ -176,8 +180,12 @@ class ClassSpiralSectionLift {
                 debounce = setTimeout(() => {
                     debounce = null;
                 }, LIFT_BOTTOM_TAMPER_DEBOUNCE);
-                // this.#_FSM.Dispatch(this.EVENTS.BOTTOM_LEVEL_REACHED);
-                this.Stop().catch(fault => this.#_FSM.Dispatch(this.EVENTS.FAULT, fault));
+
+                this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL }));
+
+                /*this.Stop()
+                    .then(() => this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL })))*/
+                    // .catch(fault => this.#_FSM.Dispatch(this.EVENTS.FAULT, fault));
             };
             tamperCachedValue = Value;
         }).bind(this);
@@ -195,7 +203,7 @@ class ClassSpiralSectionLift {
 
     SetCurrentHandler() {
         const I_currEventName = `${this.#_Channels.current}-value`;
-        const I_currHandler = (({ Value }) => this._CurrBuffer.push(Value)).bind(this);
+        const I_currHandler = (({ Value }) => this._I_CurrBuffer.push(Value)).bind(this);
 
         this.#_ProxyCh.Events.on(I_currEventName, I_currHandler);
         this.#_ChHandlers.set(I_currEventName, I_currHandler);
@@ -217,7 +225,8 @@ class ClassSpiralSectionLift {
                     this.#_Context.currentLevel--;
 
                 console.log(`[LIFT DRIVER] Уровень лифта: ${this.#_Context.currentLevel}`);
-                if (this.#_Context.currentLevel == this.#_Context.requiredLevel) {
+                console.log(`curr level:${this.#_Context.currentLevel}  required level:${this.#_Context.requiredLevel}`);
+                if (this.#_Context.currentLevel == this.#_Context.requiredLevel) {  
                     this.#_Context.timer?.clear();
 
                     this.#_FSM.Dispatch(this.EVENTS.COLLECT_LEVEL_REACHED);
@@ -228,90 +237,77 @@ class ClassSpiralSectionLift {
         }
     }
 
-    StartCurrentWatch() {
-        if (this.#_CurrentWatch) clearInterval(this.#_CurrentWatch);
+    StartPSUWatch() {
+        if (this.#_PSUWatch) clearInterval(this.#_PSUWatch);
 
-        this.#_CurrentWatch = setInterval(() => {
+        this.#_PSUWatch = setInterval(() => {
+            if (![ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT, 
+                ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE, 
+                ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM].includes(this.#_FSM.State)) return;
+            if (this.#_Context.motorTransition) return;
 
-            const isElevating = this.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT
-                            || this.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE
-                            || this.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM;
+            let I_curr = this.#_ProxyCh.GetValue(this.#_Channels.current);
+            let I_currState = this.#_ProxyCh.GetValue(this.#_Channels.short) == STORAGE_CONSTANSTS.SHORT_CH_VAL 
+                            ? ELECTR_CURR_STATE.SHORT 
+                            : this.CheckCurrentState(I_curr);
 
-            const i_curr = this.#_ProxyCh.GetValue(this.#_Channels.current);
-            this._CurrBuffer.push(i_curr);
+            let index = this.#_Context.currentOrder?.unitIndex;
 
-            let currState = this.CheckCurrentState(this._CurrBuffer.Filter());
-        
-            switch (currState) {
-                case ELECTR_CURR_STATE.OVERLOAD:
-                    this.#_SectionState.Lift = LIFT_STATE.OVERLOAD;
-                    break;
+            console.log(JSON.stringify({ state: this.#_FSM.State, I_curr, I_currState}));
 
-                case ELECTR_CURR_STATE.IDLE:
-                    if (isElevating) {
-                        this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true }));
-                        this.#_SectionState.Lift = LIFT_STATE.NO_POWER;
+            switch (I_currState) {
+                case ELECTR_CURR_STATE.SHORT:
+                    if (this.#_SectionState.Cells[index] != LIFT_STATE.SHORT_CIRCUIT) {
+                        this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index }));
                     }
                     break;
 
-                case ELECTR_CURR_STATE.SHORT:
-                    console.log(`[LIFT] curr state ${currState}`);
-                    console.log(`${this.#_ProxyCh.GetValue(this.#_Channels.current)}`);
-                    this.#_SectionState.Lift = LIFT_STATE.SHORT_CIRCUIT;
-                    this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
+                case ELECTR_CURR_STATE.OVERLOAD:
+                    if (this.#_SectionState.Lift == LIFT_STATE.OK)
+                        this.#_SectionState.Lift = LIFT_STATE.OVERLOAD;
                     break;
 
-                default:
-                    break;
-            }
-        }, MONITOR_INTERVAL);
-    }
+                // case ELECTR_CURR_STATE.IDLE:
+                //     if (this.#_SectionState.Cells[index] != LIFT_STATE.NO_POWER) {
+                //         this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.ACTUATOR_NO_POWER, index }));
+                //     }
+                //     break;
 
-    async ElevateToBaseLevel() {
-        return new Promise((res, rej) => {
-            if (this.#_Context.currentTask)
-                return rej();
+                case ELECTR_CURR_STATE.WORK_OK:
+                    this.#_SectionState.Lift = LIFT_STATE.OK;
+                }
 
-            this.#_Context.currentTask = { res, rej };
-            // const FALLBACK_TIMEOUT = 
-            /*this.#_Context.fallbackTimer = createTimer(
-                () => this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.NONE }),
-                LIFT_CONSTANTS.ELEVATE_NEXT_MAX_TIME * 10));*/
-            this.#_FSM.Dispatch(this.EVENTS.ELEVATE_TO_BASE_COMMAND);
-        });
+            // const V_voltage = this._V_VoltBuffer.Filter();
+            // TODO: контроль заниженного напряжения
+            /*if (V_voltage > STORAGE_CONSTANSTS.SUPPLY_VOLTAGE_UPPER_LIM) {
+                this.#_SectionState.Cells[index] = LIFT_STATE.OVERLOAD_V;
+            } else {
+                if (this.#_SectionState.Cells[index] == CELL_STATE.OVERLOAD_V)
+                    this.#_SectionState.Cells[index] = CELL_STATE.OK;
+            }*/
+
+        }, MONITOR_INTERVAL*3);
     }
 
     async ElevateToBottom() {
         return new Promise((res, rej) => {
             if (this.#_Context.currentTask)
-                return rej();
+                return rej('[LIFT] Выполняется предыдущая операция');
             this.#_uTransactionsList = [];
             this.#_Context.currentTask = { res, rej };
+
+            this.#_Context.fallbackTimer = createTimer(
+                () => { 
+                    console.log('lift fallback timeout');
+                    this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.NONE }));
+                },
+                LIFT_CONSTANTS.ELEVATE_NEXT_MAX_TIME * 8);
+
             this.#_FSM.Dispatch(this.EVENTS.ELEVATE_TO_BOTTOM_COMMAND);
         });
     }
 
     EmergencyOff() {}
-
-    async ElevateUpToBaseLevel() {
-        console.log(`[LIFT] Переключение полярности`);
-        try {
-            this.Stop();
-        } catch (fault) {
-            this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
-        }
-        await sleep(200);
-        this.#_Context.currentLevel = -1;
-        this.#_Context.requiredLevel = 0;
-
-        try {
-            await this.ElevateUp();
-            console.log(`ElevateUp()`);
-            this.#_Context.timer = createTimer(this.OnTimeout.bind(this), ELEVATE_NEXT_MAX_TIME).set(); 
-        } catch (fault) {
-            this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
-        }
-    }  
 
     async ElevateToLevel(requiredLevel) {
         return new Promise((res, rej) => {
@@ -319,6 +315,14 @@ class ClassSpiralSectionLift {
                 return rej('[LIFT] Выполняется предыдущая операция');
             this.#_uTransactionsList = [];
             this.#_Context.currentTask = { res, rej };
+
+            this.#_Context.fallbackTimer = createTimer(
+                () => {
+                    console.log('lift fallback timeout');
+                    this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.NONE }));
+                },
+                LIFT_CONSTANTS.ELEVATE_NEXT_MAX_TIME * 8);
+
             this.#_FSM.Dispatch(this.EVENTS.ELEVATE_COMMAND, requiredLevel);
         });
     }
@@ -342,6 +346,7 @@ class ClassSpiralSectionLift {
     }
 
     OnTimeout() {
+        console.log(`[LIFT] Timeout 387`);
         this.#_FSM.Dispatch(this.EVENTS.ELEVATE_TIMEOUT);
     }
 
@@ -351,6 +356,7 @@ class ClassSpiralSectionLift {
     
         switch (currState) {
             case ELECTR_CURR_STATE.OVERLOAD:
+                console.log(`Curr: ${this.#_ProxyCh.GetValue(this.#_Channels.current)}`);
                 this.#_Context.timer?.clear();
                 if ((this.#_Context.currentLevel == 1 || this.#_Context.currentLevel == undefined) && this.#_Context.requiredLevel == BOTTOM_LEVEL) {
                     console.log(`[LIFT] Bottom reached, tamper or jam fault`);
@@ -367,7 +373,7 @@ class ClassSpiralSectionLift {
                 break;
             case ELECTR_CURR_STATE.WORK_OK:
                 // log motor/mech fault
-                this.#_SectionState.Lift = LIFT_STATE.LEVEL_ERROR;
+                this.#_SectionState.Lift = LIFT_STATE.ERR_LEVEL;
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL, critical: false }));
                 break;
             case ELECTR_CURR_STATE.SHORT:
@@ -387,9 +393,8 @@ class ClassSpiralSectionLift {
         }
         try {
             await this.ElevateDown();
-            console.log(`ElevateDown()`);
             this.#_Context.timer?.clear();
-            if (this.#_SectionState.Lift != LIFT_STATE.LEVEL_ERROR)
+            if (this.#_SectionState.Lift != LIFT_STATE.ERR_LEVEL)
                 this.#_Context.timer = createTimer(this.OnTimeout.bind(this), ELEVATE_NEXT_MAX_TIME).set();
 
         } catch (fault) {
@@ -426,10 +431,12 @@ class ClassSpiralSectionLift {
             throw new Fault({ code: FAULTS.LIFT_CTRL_UNDEFINED, critical: true });
 
         this.#_uTransactionsList.push(fwd ? U_TRANSACTIONS.LIFT_CONNECT_GND_FWD : U_TRANSACTIONS.LIFT_CONNECT_GND_REV);
+        this.#_Context.motorTransition = true;  
         let step = 1;
         await this.MotorStep(cmd, { step });
-            
+
         await sleep(SLEEP_BETWEEN_STEPS);
+
         if (this.IsShorted())
             throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
 
@@ -442,18 +449,32 @@ class ClassSpiralSectionLift {
         this.#_uTransactionsList.push(fwd ? U_TRANSACTIONS.LIFT_CONNECT_V_PLUS_FWD : U_TRANSACTIONS.LIFT_CONNECT_V_PLUS_REV);
         step = 2;
         await this.MotorStep(cmd, { step });
+        
+        let current_2;
+        let elapsed = 0;
 
-        await sleep(SLEEP_BETWEEN_STEPS);   
+        while (elapsed < SLEEP_BETWEEN_STEPS) {
+            await sleep(100);
+            elapsed += 100;
 
-        if (this.IsShorted())
-            throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+            if (this.IsShorted()) {
+                throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+            }
 
-        let current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+            current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+            // ток обновился
+            if (!isWithinTolerance(current_1, current_2, 0.05)) {
+                break; 
+            }
+        }
+        // ток не обновился
         if (isWithinTolerance(current_1, current_2, 0.05)) {
             console.log(`[LIFT] Current has not changed ${current_1} -> ${current_2}`);
-            throw new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true });    // пробой 
+            throw new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true });
         }
+
         this.#_Context.movingDir = fwd ? 1 : -1;
+        this.#_Context.motorTransition = false;
     }
 
     /**
@@ -464,7 +485,7 @@ class ClassSpiralSectionLift {
 
         switch (fault.code) {
             case FAULTS.BOTTOM_TAMPER_FAIL:
-                this.#_SectionState.Lift = LIFT_STATE.TAMPER_ERROR;
+                this.#_SectionState.Lift = LIFT_STATE.ERR_TAMPER;
                 break;
             case FAULTS.IO_DRIVER_ERR:
                 this.#_SectionState.Lift = LIFT_STATE.BLOCKED;
@@ -474,7 +495,7 @@ class ClassSpiralSectionLift {
                 break;
             case FAULTS.LEVEL_SENSOR_FAIL:
                 this.#_Context.currentLevel = undefined;
-                this.#_SectionState.Lift = LIFT_STATE.LEVEL_ERROR;
+                this.#_SectionState.Lift = LIFT_STATE.ERR_LEVEL;
                 break;
             case FAULTS.LIFT_NO_POWER:
                 this.#_SectionState.Lift = LIFT_STATE.NO_POWER;
@@ -489,23 +510,6 @@ class ClassSpiralSectionLift {
             default:
                 break;
         }
-    }
-
-    /**
-     * 
-     * @param {object} param0
-     * @param {boolean} param0.force
-     * @returns 
-     */
-    async Stop(param0) {
-        let { force } = param0 ?? {};
-        // let curr = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        // let noMotorActive = curr < CURRENT_RANGE.WORK_OK[0];
-            
-        /*(force || noMotorActive) 
-            ? await this.MotorStep('Off', { step: undefined }) 
-            : await this.StopPhased();*/
-        return this.StopPhased();
     }
 
     /**
@@ -533,9 +537,8 @@ class ClassSpiralSectionLift {
     /**
      * @returns {Promise}
      */
-    async StopPhased() {
+    async Stop() {
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        // console.log(current_0, CURRENT_RANGE.WORK_OK[0]);
         let isIdle = current_0 < CURRENT_RANGE.WORK_OK[0]
         this.#_uTransactionsList.push(this.#_Context.movingDir > 0 ? U_TRANSACTIONS.LIFT_DISCONNECT_V_PLUS_FWD : U_TRANSACTIONS.LIFT_DISCONNECT_V_PLUS_REV);
         let step = 1;
@@ -560,8 +563,10 @@ class ClassSpiralSectionLift {
     }
 
     async OnFault(fault) {
+        debugger
         try {
-            await this.Stop({ force: true });
+            await this.Stop();
+            this.#_FSM.Dispatch(this.EVENTS.RECOVERED);
         } catch (innerFault) {
             console.error('[LIFT] Критический сбой при попытке экстренной остановки', innerFault);
             this.EmergencyOff();
@@ -587,8 +592,8 @@ class ClassSpiralSectionLift {
     }
 
 
-    OnStateChanged({state, prevState}) {
-        console.log(`[LIFT] STATE: ${prevState} -> ${state}`);
+    OnStateChanged({ eventName, state, prevState}) {
+        console.log(`[LIFT] STATE: ${prevState} --[${eventName}]--> ${state}`);
     }
     /**
      * 
@@ -601,7 +606,7 @@ class ClassSpiralSectionLift {
             return;
 
         for (let [levelName, [lowLim, highLim]] of Object.entries(CURRENT_RANGE)) {
-            if (currentAmp >= lowLim &&currentAmp < highLim)
+            if (currentAmp >= lowLim && currentAmp < highLim)
                 return ELECTR_CURR_STATE[levelName];
         }
     }
@@ -620,6 +625,7 @@ class ClassSpiralSectionLift {
         this.#_SectionState.Lift = LIFT_STATE.OK;
         this.#_Context.currentLevel = undefined;
         this.#_Context.requiredLevel = undefined;
+        this.#_Context.motorTransition = false;
         this.#_Context.timer?.clear();
         this.#_Context.timer = null;
 
