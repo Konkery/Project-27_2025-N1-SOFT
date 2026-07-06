@@ -8,10 +8,18 @@ const STORAGE_CONSTANSTS = {
 
     AVG_ROTATION_TIME: 3000,
     FULL_ROTATION_TIMEOUT: 3500,
+    TAMPER_DEBOUNCE: 500,
 
     MONITOR_INTERVAL: 200,
 
     CURRENT_RANGE: {
+        IDLE: [0, 0.3],
+        WORK_OK: [0.3, 0.21],
+        OVERLOAD: [0.21, 1],
+        SHORT: [1, Infinity]
+    },
+
+    VOLTAGE_RANGE: {
         IDLE: [0, 0.3],
         WORK_OK: [0.3, 0.21],
         OVERLOAD: [0.21, 1],
@@ -23,7 +31,11 @@ const STORAGE_CONSTANSTS = {
         WORK_OK: 'WORK_OK',
         OVERLOAD: 'STUCK',
         SHORT: 'SHORT'
-    }
+    },
+
+    SUPPLY_VOLTAGE: 24,
+    SUPPLY_VOLTAGE_UPPER_LIM: 25,
+    SUPPLY_VOLTAGE_LOWER_LIM: 23
 }
 const LIFT_CONSTANTS = {
     LIFT_LEVEL_ON: 1,
@@ -31,13 +43,13 @@ const LIFT_CONSTANTS = {
 
     LIFT_BOTTOM_TAMPER_ON: 1,
     LIFT_BOTTOM_TAMPER_OFF: 0,
-    LIFT_BOTTOM_TAMPER_DEBOUNCE: 1000,
+    LIFT_BOTTOM_TAMPER_DEBOUNCE: 500,
 
     DOUBLE_TRIGGER_WINDOW: 100,
 
-    ELEVATE_NEXT_AVG_TIME: 3000,
-    ELEVATE_NEXT_OVERLOAD_TIME: 3500,
-    ELEVATE_NEXT_MAX_TIME: 4000,
+    ELEVATE_NEXT_AVG_TIME: 800,
+    ELEVATE_NEXT_OVERLOAD_TIME: 1000,
+    ELEVATE_NEXT_MAX_TIME: 1200,
 
     MOTOR_RES_MAX_TIME: 500,
     MONITOR_INTERVAL: 200,
@@ -54,11 +66,13 @@ const LIFT_CONSTANTS = {
         WORK_OK: 'WORK_OK',
         OVERLOAD: 'STUCK',
         SHORT: 'SHORT'
-    }
+    },
+
+    WORK_VOLTAGE: 24
 }
 
 const BOX_CONSTANTS = {
-    OPENED_TIME_SEC: 30,
+    UNLOCKED_TIMEOUT_SEC: 20,
     DOOR_CLOSED: 1,
     BOX_CLOSED: 1,
     UNLOCK_ON: 1,
@@ -80,7 +94,7 @@ const FAULTS = {
 
     ACTUATOR_NO_POWER: 7,
     ACTUATOR_SHORT_CIRCUIT: 8,
-    TAMPER_ERROR: 9,
+    ERR_TAMPER: 9,
     TAMPER_BAD_POS: 19,
     ACTUATOR_OVERLOAD: 10,
     ACTUATOR_OVERLOAD_1: 11,
@@ -132,7 +146,7 @@ const FAULT_DESC_RU = {
     [FAULTS.TAMPER_BAD_POS]: "Одна из спиралей находится в некорректном начальном положении",
     [FAULTS.ACTUATOR_NO_POWER]: "Отсутствует питание актуатора",
     [FAULTS.ACTUATOR_SHORT_CIRCUIT]: "Короткое замыкание актуатора",
-    [FAULTS.TAMPER_ERROR]: "Ошибка сигнала тампера",
+    [FAULTS.ERR_TAMPER]: "Ошибка сигнала тампера",
     [FAULTS.ACTUATOR_OVERLOAD]: "Перегрузка актуатора",
 
     [FAULTS.IO_DRIVER_ERR]: "Ошибка драйвера ввода-вывода",
