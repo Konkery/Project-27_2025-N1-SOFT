@@ -6,7 +6,7 @@ const { ClassFault } = require('./srvUtils');
 const { FAULTS, STORAGE_CONSTANSTS, BOX_CONSTANTS } = require('./SpiralSectionConstants');
 const { default: BaseSectionState } = require("../../srvStatesController/js/srvBaseSectionState");
 const ClassDeliveryBox = require("./srvDelieveryBox");
-const { AVAILABLE } = require("../../srvStatesController/js/srvStates");
+const { AVAILABLE, SECTION_STATUS } = require("../../srvStatesController/js/srvStates");
 const { default: SpiralSectionState } = require("./srvSpiralSectionStates");
 
 let sleep = require('timers/promises').setTimeout;
@@ -23,7 +23,8 @@ class ClassSpiralSection extends EventEmitter2 {
 
     _Context = { 
         order: null,
-        currentTask: null
+        currentTask: null,
+        dispensedAtLeastOnce: false
     };
 
     #_ProxyCh;
@@ -41,7 +42,6 @@ class ClassSpiralSection extends EventEmitter2 {
     #_StatesGraph = {
         [ClassSpiralSection.STATE.IDLE]: {
             [this.EVENTS.DISPENSE_START]: { state: ClassSpiralSection.STATE.DISPENSING, action: this._Execute.bind(this) },
-            // [this.EVENTS.OPEN_BOX]:       { state: ClassSpiralSection.STATE.UNLOADING,  action: this.OpenBox.bind(this) },
         },
         [ClassSpiralSection.STATE.DISPENSING]: {
             [this.EVENTS.OPERATION_FINISHED]:  { state: ClassSpiralSection.STATE.IDLE, action: this.Idle.bind(this) }
@@ -63,7 +63,7 @@ class ClassSpiralSection extends EventEmitter2 {
      * @param {import("./srvSpiralSection.d.ts").TypeSpiralSectionOpts} param0.advOpts
      * @param {SpiralSectionState} param0.sectionState
      */
-    constructor({ ProxyCh, channels, advOpts, sectionState }) {
+    constructor({ ProxyCh, channels, advOpts, sectionState, logger=console }) {
         super();
         this.#_ProxyCh = ProxyCh;
         this.#_Channels = channels;
@@ -72,6 +72,7 @@ class ClassSpiralSection extends EventEmitter2 {
         this.#_Box = new ClassDeliveryBox({ ProxyCh, channels: channels.boxChannels, advOpts: {}, sectionState });
         this.#_Channels.door = channels.door;
         this.#_SectionState = sectionState;
+        this.logger = logger;
         this.Init();
     }
 
@@ -97,8 +98,10 @@ class ClassSpiralSection extends EventEmitter2 {
     Init() {
         this._DispenseHandler = this.HandleDispense.bind(this);
         this.#_Storage.Events.on('dispense', this._DispenseHandler);
-        this._FailHandler = this.HandleFail.bind(this);
+        this._FailHandler = ((cell, fault) => this.HandleFail(cell, fault, 'Не удалось выполнить выдачу ТМЦ')).bind(this);
         this.#_Storage.Events.on('fail', this._FailHandler);
+
+        this.#_SectionState.IsAvailable = AVAILABLE.YES;
     }
 
     /**
@@ -115,6 +118,8 @@ class ClassSpiralSection extends EventEmitter2 {
                 return rej(new Error('Секция не в состоянии покоя'));
 
             this._Context.currentTask = { res, rej };
+            this.#_SectionState.Status = SECTION_STATUS.DISPENSE;
+            this.#_SectionState.IsAvailable = AVAILABLE.NO;
             this.#_FSM.Dispatch(this.EVENTS.DISPENSE_START, _orders);
         });
     }
@@ -125,13 +130,16 @@ class ClassSpiralSection extends EventEmitter2 {
      * @returns {Promise}
      */
     async _Execute(_orders) {
+        const dispensedHandler = (() => this._Context.dispensedAtLeastOnce = true).bind(this);
+        this.#_Storage.Events.once('dispense', dispensedHandler);
         try {
-            if (!this.IsDoorClosed() || this.#_Box.IsOpened)
+            this.#_SectionState.Status = SECTION_STATUS.DISPENSE;
+            /*if (!this.IsDoorClosed() || this.#_Box.IsOpened)
                 return this.HandleFail(undefined, new ClassFault({ code: FAULTS.DOOR_OPENED }), 'Отказ в начале транзакции');
-            
-            /** @type {[import("./srvSpiralSection.d.ts").TypeOrder]} */
-            let orders = [..._orders];
+            */
+           let orders = [..._orders];
             orders.sort((a, b) => a.row - b.row);   //сортировка по убыванию уровня
+
             try {
                 await this.#_Lift.ElevateToBottom();
             } catch (e) {
@@ -140,13 +148,14 @@ class ClassSpiralSection extends EventEmitter2 {
             for (let level of new Set(orders.map(o => this.#_Storage.MaxLevel - o.row))) {
                 let testSpiral = orders.find(o => this.#_Storage.MaxLevel - o.row == level && this.#_Storage.IsCheckable(o));
                 if (!testSpiral) continue;
-                /*try {
+                try {
                     await this.#_Storage.TestSpiral(testSpiral);
                 } catch (e) {
-                    console.log(`[STORAGE] провал теста спирали: ${e}`);
+                    this.HandleErr(e, 'Ошибка теста спирали');
+                    console.log(`[STORAGE] провал теста спирали: ${e.code}`);
                     continue;
-                }*/
-                 
+                }
+                
                 let ordersOnLevel = orders.filter(o => this.#_Storage.MaxLevel - o.row == level && this.#_Storage.IsOk(o));
 
                 if (ordersOnLevel.length == 0) continue;
@@ -157,7 +166,7 @@ class ClassSpiralSection extends EventEmitter2 {
                     await this.#_Lift.ElevateToLevel(level);
                 } catch (e) {
                     this.HandleErr(e, `Ошибка при установке лифта на уровень ${level}`);
-                    return;
+                    break;
                 }
 
                 for (let order of ordersOnLevel) {
@@ -168,7 +177,8 @@ class ClassSpiralSection extends EventEmitter2 {
                             await this.#_Storage.Dispense(order);
                             console.log(`[STORAGE] Выполнена выдача ${JSON.stringify(order)}`);
                         } catch (e) {
-                            this.HandleFail(undefined, e, 'Не удалось выполнить выдачу ТМЦ');
+                            if (e instanceof Error)
+                                this.HandleErr(e, 'Не удалось выполнить выдачу ТМЦ');
                         }
                     } else {
                         console.log(`[STORAGE] Заказ ${JSON.stringify(order)} не будет выполнен в связи со статусом соответствующей ячейки`);
@@ -184,17 +194,19 @@ class ClassSpiralSection extends EventEmitter2 {
                 this.HandleErr(e, 'Ошибка при установке лифта в положение выдачи');
             }
 
-            // try {
-            //     await this.#_Box.Deliver();
+            if (this._Context.dispensedAtLeastOnce) try {
+                this.#_SectionState.Status = SECTION_STATUS.DELIVERY;
+                await this.#_Box.Deliver();
 
-            // } catch (e) {
-            //     this.#_SectionState.setAvailable(AVAILABLE.NO);
-            //     this.HandleErr(e, 'Не удалось выполнить выдачу ТМЦ');
-            // }
+            } catch (e) {
+                this.#_SectionState.Status = SECTION_STATUS.BLOCKED;
+                this.HandleErr(e, 'Не удалось выполнить выдачу ТМЦ');
+            }
             
         } catch (e) {
             this.HandleErr(e, 'Ошибка выполнении транзакции');
         } finally {
+            this._Context.dispensedAtLeastOnce = false;
             return this.#_FSM.Dispatch(this.EVENTS.OPERATION_FINISHED);
         }
     }
@@ -211,6 +223,11 @@ class ClassSpiralSection extends EventEmitter2 {
 
         } catch (fault) {
             // this.EmergencyOff();
+        } finally {
+            if (this.#_SectionState.Status != SECTION_STATUS.BLOCKED) {
+                this.#_SectionState.Status = SECTION_STATUS.IDLE;
+                this.#_SectionState.IsAvailable = AVAILABLE.YES;
+            }
         }
     }
 
@@ -220,10 +237,6 @@ class ClassSpiralSection extends EventEmitter2 {
         this.#_Storage.Reset();
         this.#_Box.Reset();
         if (this._Context.currentTask?.rej) {
-            // Чтобы избежать UnhandledPromiseRejection, мы делаем reject, 
-            // но если никто не ждет (нет catch), это вызовет падение. 
-            // Добавляем dummy catch к промису, если это возможно, либо глушим саму ошибку, 
-            // если она вызвана принудительным сбросом.
             this._Context.currentTask.rej(new Error('Reset'));
         }
         this._Context.currentTask = null;
@@ -233,18 +246,30 @@ class ClassSpiralSection extends EventEmitter2 {
 
         this.#_Storage.Events.off('dispense', this._DispenseHandler);
         this.#_Storage.Events.off('fail', this._FailHandler);
+
+        this.#_SectionState.Status = SECTION_STATUS.IDLE;
+        this.#_SectionState.IsAvailable = AVAILABLE.YES;
     }
 
     HandleDispense(cell) {
+        this._Context.dispensedAtLeastOnce = true;
         this.emit('result', { cell });
     }
 
-    HandleFail(cell, fault, message) {
-        this.emit('fail', { cell, fault, message });
+    /**
+     * 
+     * @param {object} cell 
+     * @param {number} cell.row 
+     * @param {number} cell.column 
+     * @param {} fault 
+     * @param {*} message 
+     */
+    HandleFail(cell, fault, message='') {
+        this.emit('fail', cell, fault, message);
     }
 
     HandleErr(e, msg) {
-        this.emit('error', { error: e, message: msg });
+        this.emit('error', e, msg='');
     }
 
     Invoke(methodName, ...args) {
@@ -253,9 +278,21 @@ class ClassSpiralSection extends EventEmitter2 {
             const { row, column, quantity, duration } = args[0];
             return quantity
                 ? this.#_Storage.Dispense({ row, column, quantity }, true) 
-                : this.#_Storage.RunMotor(row, column, duration);
+                : this.#_Storage.RunMotor({ row, column, duration });
         }
     }
+
+    Deliver() {
+        return this.#_Box.Deliver();
+    }
+
+    ManualRotateSpiral(args) {
+        if (this._Context.currentTask) return;
+        const { row, column, quantity, duration } = args ?? {};
+        return quantity
+                ? this.#_Storage.Dispense({ row, column, quantity }, true)
+                : this.#_Storage.RunMotor({ row, column, duration }); 
+    }       
 }
 
 module.exports = { ClassSpiralSection };
