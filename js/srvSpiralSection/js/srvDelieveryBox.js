@@ -2,6 +2,7 @@ const { ClassFSM: FSM } = require('./srvFSM');
 const { ClassFault } = require('./srvUtils');
 const { BOX_CONSTANTS, FAULTS } = require('./SpiralSectionConstants');
 const { default: BaseSectionState } = require("../../srvStatesController/js/srvBaseSectionState");
+const { default: SpiralSectionState, DELIVERY_BOX_STATE } = require('./srvSpiralSectionStates');
 
 class ClassDeliveryBox {
 
@@ -18,7 +19,8 @@ class ClassDeliveryBox {
         TIMEOUT: 'OPEN_TIMEOUT',
         FINISH: 'FINISH'
     };
-
+    /** @type {SpiralSectionState} */
+    #_SectionState = null;
     #_FSM;
     #_StateGraph = {
         [ClassDeliveryBox.STATE.CLOSED]: {
@@ -64,16 +66,26 @@ class ClassDeliveryBox {
      * @param {BaseSectionState} param0.sectionState
      */
     constructor({ ProxyCh, channels, advOpts, sectionState }) {
-
         this.#_ProxyCh = ProxyCh;
-
+        this.#_SectionState = sectionState;
         this.#_Channels = channels;
-        this.unlockTimeoutMs = advOpts.unlockTimeoutMs ?? 100000;
-
-        this.#_FSM = new FSM({
+        this.unlockTimeout = BOX_CONSTANTS.UNLOCKED_TIMEOUT_SEC ?? 100;
+        this.#_FSM = new FSM({      // TODO clear on reset
             defaultState: ClassDeliveryBox.STATE.CLOSED,
-            stateGraph: this.#_StateGraph
+            stateGraph: this.#_StateGraph,
+            onStateChanged: (({ state, prevState }) => {
+                console.log(`[BOX] ${prevState} -> ${state}`);
+                switch (state) {
+                    case ClassDeliveryBox.STATE.OPENED:
+                        this.#_SectionState.DeliveryBox = DELIVERY_BOX_STATE.OPENED;
+                        break;
+                    case ClassDeliveryBox.STATE.CLOSED:
+                        this.#_SectionState.DeliveryBox = DELIVERY_BOX_STATE.CLOSED;
+                        break;
+                }
+            }).bind(this)
         });
+        this.InitEventHandlers();
     }
 
     get IsOpened() {
@@ -96,15 +108,13 @@ class ClassDeliveryBox {
     }
 
     _Unlock() {
-        console.log('[BOX] unlock start');
-
         this.SetLockState(BOX_CONSTANTS.UNLOCK_ON);
 
         this.#_Context.openTimer = setTimeout(() => {
 
             this.#_FSM.Dispatch(ClassDeliveryBox.EVENTS.TIMEOUT);
 
-        }, this.unlockTimeoutMs);
+        }, this.unlockTimeout*1000);
     }
 
     OnDoorOpened() {
@@ -151,7 +161,7 @@ class ClassDeliveryBox {
 
                 case ClassDeliveryBox.STATE.UNLOCKING:
 
-                    if (Value === ClassDeliveryBox.STATE.OPENED) {
+                    if (Value != BOX_CONSTANTS.BOX_CLOSED) {
                         console.log('[BOX] Люк был открыт');
                         this.#_FSM.Dispatch(ClassDeliveryBox.EVENTS.OPENED);
                     }
@@ -159,8 +169,7 @@ class ClassDeliveryBox {
 
                 case ClassDeliveryBox.STATE.OPENED:
 
-                    if (Value === ClassDeliveryBox.STATE.CLOSED) {
-                        console.log('[BOX] Люк был закрыт');
+                    if (Value == BOX_CONSTANTS.BOX_CLOSED) {
                         this.#_FSM.Dispatch(ClassDeliveryBox.EVENTS.CLOSED);
                     }
 
