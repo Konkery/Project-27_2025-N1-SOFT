@@ -1,6 +1,6 @@
 const { randomUUID } = require('node:crypto');
 const { default: StatesController } = require('../../srvStatesController/js/srvSectionStateController');
-const { GLOBAL_MACHINE_STATE, BUS_MEAS_STATE, AVAILABLE } = require('../../srvStatesController/js/srvStates');
+const { GLOBAL_MACHINE_STATE, /*BUS_MEAS_STATE,*/ AVAILABLE, SECTION_STATUS } = require('../../srvStatesController/js/srvStates');
 
 const EventEmitter = require('eventemitter2').EventEmitter2;
 
@@ -19,13 +19,13 @@ class ClassProxySection {
      * 
      * @param {object} param0 
      * @param {[import('./Messages').TypeTarget]} param0.sections 
-     * @param {StatesController} param0.stateController
+     * @param {StatesController} param0.StateController
      */
-    constructor({ sections, stateController }) {
+    constructor({ sections, StateController }) {
         /** @type {EventEmitter} */
         this.Events = new EventEmitter();
         this._Sections = sections;
-        this._StateController = stateController;
+        this._StateController = StateController;
     }
     /**
      * @returns {Array<{ topic: string, payload: any }>}
@@ -46,16 +46,18 @@ class ClassProxySection {
         if (!this.GlobalStateAllowsCommand()) return;
         const { ID, Orders, UserID, Source } = Transaction;
         
-        for (const _order of Orders) {
-            const section = this.GetSectionByTarget(_order.Target);
-            if (!section) continue;
-            const sectionState = this._StateController.sections.get(section.name);
-            if (sectionState.IsAvailable != AVAILABLE.YES) continue;
-            const order = this.ProcessOrder(ID, _order)
-        }
-            // .filter(({ section }) => )
-        // const section = this.GetSectionByTarget(order.Target);
-        // this._Targets[section]?.comQueue.addTask(ID, order);
+        // for (const _order of Orders) {
+        return Orders.map(_order => {
+            // const section = this.GetSectionByTarget(_order.Target);
+            const sectionState = this._StateController.Machine.States.Sections[_order.Target.name];
+            if (!sectionState) return;
+            // const sectionState = this._StateController.Machine.States.Sections[section.name];
+            if (sectionState.Status != SECTION_STATUS.IDLE) return;
+            if (sectionState.IsAvailable != AVAILABLE.YES) return;
+            const order = this.ProcessOrder(ID, _order);
+            return { section: sectionState.Name ?? _order.Target.name, order };
+            // this.RouteCommand(order);
+        }).filter(Boolean);
     }
 
     /**
@@ -84,8 +86,8 @@ class ClassProxySection {
     ProcessOrder(id, order) {
         // TODO: фильтр сообщений для Target
         // let ID = v4();
-        if (order.Command == COMMANDS.GetItem) {
-            if (!this.IsGetItemOrderValid(order)) return;
+        if (order?.Command?.toLowerCase() == COMMANDS.GetItem.toLowerCase()) {
+            // if (!this.IsGetItemOrderValid(order)) return;
             return { ID: id, ...order };
         }
     }
@@ -96,9 +98,9 @@ class ClassProxySection {
      */
     IsGetItemOrderValid(order) {
         if (order.Cells.length == 0) return false;
-        const section = this.GetSectionByTarget(order.Target);
+        const section = this._StateController.Machine.States.Sections[order.Target.name];
         if (!section) return false;
-        const sectionState = this._StateController.sections.get(section.name);
+        // const sectionState = this._StateController.sections.get(section.name);
         const hasFaultCells = order.Cells.some(cell => !sectionState.isCellAvailable(cell));
         return hasFaultCells;
     }
@@ -169,9 +171,9 @@ class ClassProxySection {
     }
 
     GlobalStateAllowsCommand() {
-        const { MachineState, Env } = this._StateController.global;
-        return MachineState == GLOBAL_MACHINE_STATE.OK
-            && [...Env.values()].some(sensor => sensor.critical && sensor.state != MEAS_STATE.OK);
+        const { Mode, Env } = this._StateController.Machine.States;
+        return Mode == GLOBAL_MACHINE_STATE.OK;
+            // && [...Env.values()].some(sensor => sensor.critical && sensor.state != MEAS_STATE.OK);
             
     }
 }
