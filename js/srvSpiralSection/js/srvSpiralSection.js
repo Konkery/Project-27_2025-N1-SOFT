@@ -11,7 +11,7 @@ const { default: SpiralSectionState } = require("./srvSpiralSectionStates");
 
 let sleep = require('timers/promises').setTimeout;
 
-const DELAY_BEFORE_DISPENSE = 100;
+const DELAY_BEFORE_DISPENSE = 250;
 
 class ClassSpiralSection extends EventEmitter2 {
 
@@ -62,17 +62,18 @@ class ClassSpiralSection extends EventEmitter2 {
      * @param {import("./srvSpiralSection.d.ts").TypeSpiralSectionChannels} param0.channels
      * @param {import("./srvSpiralSection.d.ts").TypeSpiralSectionOpts} param0.advOpts
      * @param {SpiralSectionState} param0.sectionState
+     * @param {import("./srvSpiralSection.d.ts").TypeProxyLogger} param0.ProxyLogger
      */
-    constructor({ ProxyCh, channels, advOpts, sectionState, logger=console }) {
+    constructor({ ProxyCh, channels, advOpts, sectionState, ProxyLogger }) {
         super();
         this.#_ProxyCh = ProxyCh;
         this.#_Channels = channels;
-        this.#_Lift = new ClassSpiralSectionLift({ ProxyCh, channels: channels.liftChannels, advOpts: advOpts.liftOpts, sectionState });
-        this.#_Storage = new ClassSpiralSectionStorage({ ProxyCh, channels: channels.storageChannels, advOpts: advOpts.storageOpts, sectionState });
-        this.#_Box = new ClassDeliveryBox({ ProxyCh, channels: channels.boxChannels, advOpts: {}, sectionState });
+        this.#_Lift = new ClassSpiralSectionLift({ ProxyCh, ProxyLogger, channels: channels.liftChannels, advOpts: advOpts.liftOpts, sectionState });
+        this.#_Storage = new ClassSpiralSectionStorage({ ProxyCh, ProxyLogger, channels: channels.storageChannels, advOpts: advOpts.storageOpts, sectionState });
+        this.#_Box = new ClassDeliveryBox({ ProxyCh, ProxyLogger, channels: channels.boxChannels, advOpts: {}, sectionState });
         this.#_Channels.door = channels.door;
         this.#_SectionState = sectionState;
-        this.logger = logger;
+        this._ProxyLogger = ProxyLogger;
         this.Init();
     }
 
@@ -130,8 +131,6 @@ class ClassSpiralSection extends EventEmitter2 {
      * @returns {Promise}
      */
     async _Execute(_orders) {
-        const dispensedHandler = (() => this._Context.dispensedAtLeastOnce = true).bind(this);
-        this.#_Storage.Events.once('dispense', dispensedHandler);
         try {
             this.#_SectionState.Status = SECTION_STATUS.DISPENSE;
             /*if (!this.IsDoorClosed() || this.#_Box.IsOpened)
@@ -149,19 +148,20 @@ class ClassSpiralSection extends EventEmitter2 {
                 let testSpiral = orders.find(o => this.#_Storage.MaxLevel - o.row == level && this.#_Storage.IsCheckable(o));
                 if (!testSpiral) continue;
                 try {
+                    await sleep(100);
                     await this.#_Storage.TestSpiral(testSpiral);
                 } catch (e) {
                     this.HandleErr(e, 'Ошибка теста спирали');
-                    console.log(`[STORAGE] провал теста спирали: ${e.code}`);
+                    this._ProxyLogger.Log({ level: 'E', msg: `[STORAGE] провал теста спирали: ${e.code}` });
                     continue;
                 }
                 
-                let ordersOnLevel = orders.filter(o => this.#_Storage.MaxLevel - o.row == level && this.#_Storage.IsOk(o));
+                let ordersOnLevel = orders.filter(o => this.#_Storage.MaxLevel - o.row == level && this.#_Storage.IsCheckable(o));
 
                 if (ordersOnLevel.length == 0) continue;
-
-                await sleep(1000);
-                console.log(`[STORAGE] Команда поднять лифт на уровень ${level}`);
+                
+                await sleep(100);
+                this._ProxyLogger.Log({ level: 'DEBUG', msg: `[STORAGE] Команда поднять лифт на уровень ${level}` });
                 try {
                     await this.#_Lift.ElevateToLevel(level);
                 } catch (e) {
@@ -171,30 +171,31 @@ class ClassSpiralSection extends EventEmitter2 {
 
                 for (let order of ordersOnLevel) {
                     await sleep(DELAY_BEFORE_DISPENSE);
-                    if (this.#_Storage.IsOk(order)) {
-                        console.log(`Order: ${JSON.stringify(order)}`);
+                    if (this.#_Storage.IsCheckable(order)) {
+                        this._ProxyLogger.Log({ level: 'I', msg: `Order: ${JSON.stringify(order)}` });
                         try {
                             await this.#_Storage.Dispense(order);
-                            console.log(`[STORAGE] Выполнена выдача ${JSON.stringify(order)}`);
+                            this._ProxyLogger.Log({ level: 'I', msg: `[STORAGE] Выполнена выдача ${JSON.stringify(order)}` });
                         } catch (e) {
                             if (e instanceof Error)
                                 this.HandleErr(e, 'Не удалось выполнить выдачу ТМЦ');
                         }
                     } else {
-                        console.log(`[STORAGE] Заказ ${JSON.stringify(order)} не будет выполнен в связи со статусом соответствующей ячейки`);
+                        this._ProxyLogger.Log({ level: 'I', msg: `[STORAGE] Заказ ${JSON.stringify(order)} не будет выполнен в связи со статусом соответствующей ячейки` });
                     }
                 }
             }
             
             try {
-                console.log(`[LIFT] Для выдачи лифт спускается на 0-й уровень`);
+                await sleep(100);
+                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Для выдачи лифт спускается на 0-й уровень` });
                 await this.#_Lift.ElevateToBottom();
 
             } catch (e) {
                 this.HandleErr(e, 'Ошибка при установке лифта в положение выдачи');
             }
 
-            if (this._Context.dispensedAtLeastOnce) try {
+            if (this._Context.dispensedAtLeastOnce && this.#_Lift.Level == 0) try {
                 this.#_SectionState.Status = SECTION_STATUS.DELIVERY;
                 await this.#_Box.Deliver();
 
@@ -236,6 +237,9 @@ class ClassSpiralSection extends EventEmitter2 {
         this.#_Lift.Reset();
         this.#_Storage.Reset();
         this.#_Box.Reset();
+
+        this._Context.dispensedAtLeastOnce = false;
+
         if (this._Context.currentTask?.rej) {
             this._Context.currentTask.rej(new Error('Reset'));
         }
@@ -244,8 +248,8 @@ class ClassSpiralSection extends EventEmitter2 {
         if (this.openedTimer) clearTimeout(this.openedTimer);
         this.openedTimer = null;
 
-        this.#_Storage.Events.off('dispense', this._DispenseHandler);
-        this.#_Storage.Events.off('fail', this._FailHandler);
+        // this.#_Storage.Events.off('dispense', this._DispenseHandler);
+        // this.#_Storage.Events.off('fail', this._FailHandler);
 
         this.#_SectionState.Status = SECTION_STATUS.IDLE;
         this.#_SectionState.IsAvailable = AVAILABLE.YES;
@@ -269,6 +273,7 @@ class ClassSpiralSection extends EventEmitter2 {
     }
 
     HandleErr(e, msg) {
+        this._ProxyLogger.Log({ level: 'E', msg: `[ERROR] ${msg}` });
         this.emit('error', e, msg='');
     }
 

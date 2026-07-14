@@ -77,9 +77,11 @@ class ClassSpiralSectionLift {
      * @param {import("./srvSpiralSectionLift").TypeSpiralSectionLiftChannels} channels
      * @param {import("./srvSpiralSectionLift").TypeSpiralSectionLiftOpts} param0.advOpts 
      * @param {SpiralSectionState} param0.sectionState
+     * @param {import("./srvSpiralSection.d.ts").TypeProxyLogger} param0.ProxyLogger
      */
-    constructor({ ProxyCh, channels, advOpts, globalState, sectionState }) {
+    constructor({ ProxyCh, channels, advOpts, globalState, sectionState, ProxyLogger }) {
         this.#_ProxyCh = ProxyCh;
+        this._ProxyLogger = ProxyLogger;
         this.#_Channels = channels;
         this.#_GlobalState = globalState;
         this.#_SectionState = sectionState;
@@ -135,9 +137,9 @@ class ClassSpiralSectionLift {
     Init() {
         this.InitEventHandlers();
         this.Stop()
-            .catch(e => console.log('[LIFT] Не удалось выполнить reset мотора', e))
+            .catch(e => this._ProxyLogger.Log({ level: 'E', msg: '[LIFT] Не удалось выполнить Reset мотора', obj: { error: e } }))
             .then(() => {
-                this.ElevateToBottom().catch(e => console.log('[LIFT] Не удалось установить лифт в нижнее положение', e));
+                this.ElevateToBottom().catch(e => this._ProxyLogger.Log({ level: 'E', msg: '[LIFT] Не удалось установить лифт в нижнее положение', obj: { error: e } }));
             });
 
     }
@@ -159,7 +161,7 @@ class ClassSpiralSectionLift {
         const handler = (({ Value }) => {
             if (Value != tamperCachedValue && Value == LIFT_BOTTOM_TAMPER_ON && !debounce) {
                 this.#_Context.timer?.clear();
-                console.log(`[LIFT] обновлен сигнал на нижнем тампере: ${Value}`);
+                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] обновлен сигнал на нижнем тампере: ${Value}` });
                 debounce = setTimeout(() => {
                     debounce = null;
                 }, LIFT_BOTTOM_TAMPER_DEBOUNCE);
@@ -181,7 +183,7 @@ class ClassSpiralSectionLift {
         const handler = (({ Value }) => {
             if (Value != tamperCachedValue && Value == LIFT_BOTTOM_TAMPER_ON && !debounce) {
                 this.#_Context.timer?.clear();
-                console.log(`[LIFT] обновлен сигнал на верхнем тампере: ${Value}`);
+                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] обновлен сигнал на верхнем тампере: ${Value}` });
                 debounce = setTimeout(() => {
                     debounce = null;
                 }, LIFT_BOTTOM_TAMPER_DEBOUNCE);
@@ -236,7 +238,7 @@ class ClassSpiralSectionLift {
                 if (motorState.cmd == 'Reverse')
                     this.#_Context.currentLevel--;
 
-                console.log(`[LIFT DRIVER] Уровень лифта: ${this.#_Context.currentLevel}`);
+                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Уровень лифта: ${this.#_Context.currentLevel}` });
                 if (this.#_Context.currentLevel == this.#_Context.requiredLevel) {  
                     this.#_Context.timer?.clear();
 
@@ -272,8 +274,10 @@ class ClassSpiralSectionLift {
             switch (I_currState) {
                 case ELECTR_CURR_STATE.SHORT:
                     if (this.#_SectionState.Cells[index] != LIFT_STATE.SHORT_CIRCUIT) {
-                        if (++this.short_count == 3)
+                        if (++this.short_count == 3) {
+                            this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Мониторинг выявил КЗ. Ток: ${I_curr?.toFixed?.(2)}` });
                             this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index }));
+                        }
                     }
                     break;
 
@@ -284,9 +288,10 @@ class ClassSpiralSectionLift {
 
                 case ELECTR_CURR_STATE.IDLE:
                     if (this.#_SectionState.Cells[index] != LIFT_STATE.NO_POWER) {
-                        if (++this.nopower_count == 3)
-                            console.log(`[LIFT] dispatch no power ${I_curr}`);
-                        // this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.ACTUATOR_NO_POWER, index }));
+                        if (++this.nopower_count == 3) {
+                            this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Мониторинг выявил отсутствие питания. Ток: ${I_curr?.toFixed?.(2)}` });
+                            this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.ACTUATOR_NO_POWER, index }));
+                        }
                     }
                     break;
 
@@ -317,7 +322,7 @@ class ClassSpiralSectionLift {
 
             this.#_Context.fallbackTimer = createTimer(
                 () => { 
-                    console.log('lift fallback timeout');
+                    this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] fallback timeout` });
                     this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.NONE }));
                 },
                 LIFT_CONSTANTS.ELEVATE_NEXT_MAX_TIME * 8);
@@ -337,7 +342,7 @@ class ClassSpiralSectionLift {
 
             this.#_Context.fallbackTimer = createTimer(
                 () => {
-                    console.log('lift fallback timeout');
+                    this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] fallback timeout` });
                     this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.NONE }));
                 },
                 LIFT_CONSTANTS.ELEVATE_NEXT_MAX_TIME * 8);
@@ -364,37 +369,40 @@ class ClassSpiralSectionLift {
     }
 
     OnTimeout() {
-        console.log(`[LIFT] Timeout 387`);
+        this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Timeout 387` });
         this.#_FSM.Dispatch(this.EVENTS.ELEVATE_TIMEOUT);
     }
 
     async OnElevateTimeout() {
-        console.log(`[LIFT] Timeout`);
+        this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Timeout` });
         let currState = this.CheckCurrentState();
     
         switch (currState) {
             case ELECTR_CURR_STATE.OVERLOAD:
-                console.log(`Curr: ${this.#_ProxyCh.GetValue(this.#_Channels.current)}`);
+                
                 this.#_Context.timer?.clear();
                 if ((this.#_Context.currentLevel == 1 || this.#_Context.currentLevel == undefined) && this.#_Context.requiredLevel == BOTTOM_LEVEL) {
-                    console.log(`[LIFT] Bottom reached, tamper or jam fault`);
+                    this._ProxyLogger.Log({ level: 'E', msg: `[LIFT] Таймаут ожидания лифта. Вероятно поломка нижнего концевика. Ток: ${this.#_ProxyCh.GetValue(this.#_Channels.current)?.toFixed?.(2)}` });
                     this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.BOTTOM_TAMPER_FAIL, critical: false }));
                 } else {
-                    console.log(`[LIFT] Lift is stuck`);
+                    this._ProxyLogger.Log({ level: 'E', msg: `[LIFT] Таймаут ожидания лифта. Вероятно произошло механическое заклинивание. Ток: ${this.#_ProxyCh.GetValue(this.#_Channels.current)?.toFixed?.(2)}` });
                     this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_OVERLOAD, critical: true }));
                     this.#_SectionState.Lift = LIFT_STATE.OVERLOAD;
                 }
                 break;
             case ELECTR_CURR_STATE.IDLE:
+                this._ProxyLogger.Log({ level: 'E', msg: `[LIFT] Таймаут ожидания лифта. Отсутствие питания. Ток: ${this.#_ProxyCh.GetValue(this.#_Channels.current)?.toFixed?.(2)} ` });
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true }));
                 this.#_SectionState.Lift = LIFT_STATE.NO_POWER;
                 break;
             case ELECTR_CURR_STATE.WORK_OK:
-                // log motor/mech fault
                 this.#_SectionState.Lift = LIFT_STATE.ERR_LEVEL;
+                this._ProxyLogger.Log({ level: 'E', msg: `[LIFT] Таймаут ожидания лифта. Ошибка датчика уровня. Ток: ${this.#_ProxyCh.GetValue(this.#_Channels.current)?.toFixed?.(2)} ` });
+                
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL, critical: false }));
                 break;
             case ELECTR_CURR_STATE.SHORT:
+                this._ProxyLogger.Log({ level: 'E', msg: `[LIFT] Таймаут ожидания лифта. Короткое замыкание. Ток: ${this.#_ProxyCh.GetValue(this.#_Channels.current)?.toFixed?.(2)} ` });
                 this.#_SectionState.Lift = LIFT_STATE.SHORT_CIRCUIT;
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true }));
                 break;
@@ -445,7 +453,7 @@ class ClassSpiralSectionLift {
         let fwd = cmd == 'Forward';
         await this.StopForce();
         
-        await sleep(SLEEP_BETWEEN_STEPS);
+        // await sleep(SLEEP_BETWEEN_STEPS);
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (current_0 >= CURRENT_RANGE.WORK_OK[0]) 
             throw new Fault({ code: FAULTS.LIFT_CTRL_UNDEFINED, critical: true });
@@ -453,7 +461,7 @@ class ClassSpiralSectionLift {
         this.#_uTransactionsList.push(fwd ? U_TRANSACTIONS.LIFT_CONNECT_GND_FWD : U_TRANSACTIONS.LIFT_CONNECT_GND_REV);  
         let step = 1;
         await this.MotorStep(cmd, { step });
-
+        
         await sleep(SLEEP_BETWEEN_STEPS);
 
         if (this.IsShorted())
@@ -461,37 +469,40 @@ class ClassSpiralSectionLift {
 
         let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (!isWithinTolerance(current_0, current_1, 0.1)) {   // пробой 
-            console.log(`[LIFT] Current significantly changed (${current_0} -> ${current_1}) after On({ step: 1 })"`);
+            this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Ток значительно вырос (${current_0} -> ${current_1}) после Первого шага включения лифта` });
             throw new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
         }
 
         this.#_uTransactionsList.push(fwd ? U_TRANSACTIONS.LIFT_CONNECT_V_PLUS_FWD : U_TRANSACTIONS.LIFT_CONNECT_V_PLUS_REV);
         step = 2;
         await this.MotorStep(cmd, { step });
-        
-        let current_2;
-        let elapsed = 0;
 
-        while (elapsed < SLEEP_BETWEEN_STEPS) {
-            await sleep(100);
-            elapsed += 100;
+        (async () => {
+            
+            let current_2;
+            let elapsed = 0;
 
-            if (this.IsShorted()) {
-                throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+            while (elapsed < SLEEP_BETWEEN_STEPS) {
+                await sleep(100);
+                elapsed += 100;
+
+                if (this.IsShorted()) {
+                    throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+                }
+
+                current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] I = ${current_2}` });
+                // ток обновился
+                if (!isWithinTolerance(current_1, current_2, 0.1)) {
+                    break; 
+                }
             }
-
-            current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-            console.log(`I = ${current_2}`);
-            // ток обновился
-            if (!isWithinTolerance(current_1, current_2, 0.1)) {
-                break; 
+            // ток не обновился
+            if (isWithinTolerance(current_1, current_2, 0.1)) {
+                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Ток не изменился после второго шага включения лифта ${current_1} -> ${current_2}` });
+                throw new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true });
             }
-        }
-        // ток не обновился
-        if (isWithinTolerance(current_1, current_2, 0.1)) {
-            console.log(`[LIFT] Current has not changed ${current_1} -> ${current_2}`);
-            throw new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true });
-        }
+        }).bind(this)().catch((f => this.#_FSM.Dispatch(this.EVENTS.FAULT, f)).bind(this));
 
         this.#_Context.movingDir = fwd ? 1 : -1;
         this.#_Context.motorTransition = false;
@@ -545,7 +556,7 @@ class ClassSpiralSectionLift {
         let step1Response = await this.#_ProxyCh.Events.waitFor(`${this.#_Channels.liftMotorCtrl}-value`, {
             timeout: LIFT_CONSTANTS.MOTOR_RES_MAX_TIME, 
         }).catch(() => {
-            console.log(`Motor error: no response from "${this.#_Channels.liftMotorCtrl} on step ${step}"`);
+            this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Motor error: no response from "${this.#_Channels.liftMotorCtrl} on step ${step}"` });
             throw new Fault({ code: FAULTS.IO_TIMEOUT, critical: true });
         });
         if (step1Response[0].Value.error) {
@@ -558,7 +569,7 @@ class ClassSpiralSectionLift {
      * @returns {Promise}
      */
     async Stop() {
-        let current_0 = this._I_CurrBuffer.Filter();
+        let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         let isIdle = current_0 < CURRENT_RANGE.WORK_OK[0]
         this.#_uTransactionsList.push(this.#_Context.movingDir > 0 ? U_TRANSACTIONS.LIFT_DISCONNECT_V_PLUS_FWD : U_TRANSACTIONS.LIFT_DISCONNECT_V_PLUS_REV);
         let step = 1;
@@ -572,7 +583,7 @@ class ClassSpiralSectionLift {
         let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
 
         if (!isIdle && isWithinTolerance(current_0, current_1, 0.1)) {
-            console.log(`[LIFT] Current ${current_0} -> ${current_1} after Off({ step: ${step} }), Idle: ${isIdle}"`);
+            this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Ток не пропал (${current_0} -> ${current_1}) после Остановки лифта` });
             throw new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
         }
         
@@ -601,7 +612,7 @@ class ClassSpiralSectionLift {
             await this.Stop();
             this.#_FSM.Dispatch(this.EVENTS.RECOVERED);
         } catch (innerFault) {
-            console.error('[LIFT] Критический сбой при попытке экстренной остановки', innerFault);
+            this._ProxyLogger.Log({ level: 'E', msg: `[LIFT] Критический сбой при попытке экстренной остановки` });
             this.StopForce();
         } finally {
             this.UpdateStatus(fault);
@@ -615,7 +626,7 @@ class ClassSpiralSectionLift {
         try {
             await this.Stop();
         } catch (fault) {
-            console.error('[LIFT] Ошибка при штатной парковке', fault);
+            this._ProxyLogger.Log({ level: 'E', msg: `[LIFT] Ошибка при переходе в состояние IDLE` });
             this.#_FSM.Dispatch(this.EVENTS.FAULT, fault);
             return; 
         } 
@@ -625,7 +636,7 @@ class ClassSpiralSectionLift {
 
 
     OnStateChanged({ eventName, state, prevState}) {
-        console.log(`[LIFT] STATE: ${prevState} --[${eventName}]--> ${state}`);
+        this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] STATE: ${prevState} --[${eventName}]--> ${state}` });
     }
     /**
      * 

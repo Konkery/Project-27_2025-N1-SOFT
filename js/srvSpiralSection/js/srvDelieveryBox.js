@@ -64,9 +64,11 @@ class ClassDeliveryBox {
      * @param {import('./srvSpiralSection').TypeDeliveryBoxChannels} param0.channels 
      * @param {object} param0.advOpts
      * @param {BaseSectionState} param0.sectionState
+     * @param {import('../../srvLogger/js/srvProxyLogger').ClassProxyLogger} param0.ProxyLogger
      */
     constructor({ ProxyCh, channels, advOpts, sectionState }) {
         this.#_ProxyCh = ProxyCh;
+        this._ProxyLogger = advOpts.ProxyLogger;
         this.#_SectionState = sectionState;
         this.#_Channels = channels;
         this.unlockTimeout = BOX_CONSTANTS.UNLOCKED_TIMEOUT_SEC ?? 100;
@@ -74,7 +76,7 @@ class ClassDeliveryBox {
             defaultState: ClassDeliveryBox.STATE.CLOSED,
             stateGraph: this.#_StateGraph,
             onStateChanged: (({ state, prevState }) => {
-                console.log(`[BOX] ${prevState} -> ${state}`);
+                this._ProxyLogger.Log({ level: 'D', msg: `[BOX] ${prevState} -> ${state}` });
                 switch (state) {
                     case ClassDeliveryBox.STATE.OPENED:
                         this.#_SectionState.DeliveryBox = DELIVERY_BOX_STATE.OPENED;
@@ -89,7 +91,8 @@ class ClassDeliveryBox {
     }
 
     get IsOpened() {
-        return this.#_FSM.State == ClassDeliveryBox.STATE.OPENED;
+        return this.#_ProxyCh.GetValue(this.#_Channels.optic) != BOX_CONSTANTS.BOX_CLOSED;
+        // return this.#_FSM.State == ClassDeliveryBox.STATE.OPENED;
     }
 
     async Deliver() {
@@ -118,8 +121,6 @@ class ClassDeliveryBox {
     }
 
     OnDoorOpened() {
-        console.log('[BOX] box opened');
-
         if (this.#_Context.openTimer)
             clearTimeout(this.#_Context.openTimer);
 
@@ -127,17 +128,19 @@ class ClassDeliveryBox {
     }
 
     FinishDelivery() {
-        this.SetLockState(BOX_CONSTANTS.UNLOCK_OFF);
-
+        this.keepOpened = setTimeout(
+            () => this.SetLockState(BOX_CONSTANTS.UNLOCK_OFF), 
+            BOX_CONSTANTS.UNLOCKED_TIMEOUT_SEC / 2 * 1000);
+    
         this.#_Context.currentTask?.res();
         this.#_Context.currentTask = null;
     }
 
     AbortDelivery() {
-        console.log('[BOX] Таймаут выдачи');
+        this._ProxyLogger.Log({ level: 'I', msg: `[BOX] Таймаут выдачи` });
         this.SetLockState(BOX_CONSTANTS.UNLOCK_OFF);
 
-        this.#_Context.currentTask?.rej(new Error('Door was not opened'));
+        this.#_Context.currentTask?.rej(new Error('Лючок не был открыт'));
         this.#_Context.currentTask = null;
     }
 
@@ -162,7 +165,6 @@ class ClassDeliveryBox {
                 case ClassDeliveryBox.STATE.UNLOCKING:
 
                     if (Value != BOX_CONSTANTS.BOX_CLOSED) {
-                        console.log('[BOX] Люк был открыт');
                         this.#_FSM.Dispatch(ClassDeliveryBox.EVENTS.OPENED);
                     }
                     break;
@@ -189,16 +191,22 @@ class ClassDeliveryBox {
         if (this.#_Context.openTimer)
             clearTimeout(this.#_Context.openTimer);
 
-        this.#_Context.openTimer = null;
+        if (this.keepOpened) {
+            clearTimeout(this.keepOpened);
+            this.keepOpened = null;
+        }
 
+        this.#_Context.openTimer = null;
+        this.#_Context.currentTask?.rej?.(new Error('Reset'));
         this.#_Context.currentTask = null;
 
         this.SetLockState(BOX_CONSTANTS.UNLOCK_OFF);
+        this.#_SectionState.DeliveryBox = DELIVERY_BOX_STATE.CLOSED;
 
-        for (let [eventName, handler] of this.#_DoorHandlers)
-            this.#_ProxyCh.Events.off(eventName, handler);
+        // for (let [eventName, handler] of this.#_DoorHandlers)
+        //     this.#_ProxyCh.Events.off(eventName, handler);
 
-        this.#_DoorHandlers.clear();
+        // this.#_DoorHandlers.clear();
     }
 }
 
