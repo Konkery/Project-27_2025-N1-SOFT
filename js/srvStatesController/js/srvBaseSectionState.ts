@@ -18,7 +18,7 @@ interface TYPE_IO {
 export class BaseSectionState < TCellState extends string = CellStateKeys> extends EventEmitter2 {
 
     public Name: string;
-    public IsAvailble: typeof AVAILABLE[keyof typeof AVAILABLE];
+    public IsAvailable: typeof AVAILABLE[keyof typeof AVAILABLE];
     public Status: SectionStatusKeys;
     public Rows: LineStateKeys[];
     public Cols: LineStateKeys[];
@@ -31,13 +31,15 @@ export class BaseSectionState < TCellState extends string = CellStateKeys> exten
     constructor(config: ISectionParams) {
         super();
         this.Name = config.Name;
-        this.IsAvailble = AVAILABLE.YES;
+        this.IsAvailable = AVAILABLE.YES;
         this.Status = SECTION_STATUS.IDLE;
-        this.Rows = Array.from({ length: config.Size.rows }, () => LINE_STATE.OK);
-        this.Cols = Array.from({ length: config.Size.cols }, () => LINE_STATE.OK);
-        this.Cells = Array.from({ length: config.Size.rows * config.Size.cols }, () => CELL_STATE.OK as TCellState);
-        this.Resourse_available = Array.from({ length: config.Size.rows * config.Size.cols }, () => AVAILABLE.YES);
-        this.Resourse_standard = Array.from({ length: config.Size.rows * config.Size.cols }, () => 0);
+        const rows = config.Size?.rows ?? 3;
+        const cols = config.Size?.cols ?? 3;
+        this.Rows = Array.from({ length: rows }, () => LINE_STATE.OK);
+        this.Cols = Array.from({ length: cols }, () => LINE_STATE.OK);
+        this.Cells = Array.from({ length: rows * cols }, () => CELL_STATE.OK as TCellState);
+        this.Resourse_available = Array.from({ length: rows * cols }, () => AVAILABLE.YES);
+        this.Resourse_standard = Array.from({ length: rows * cols }, () => 0);
 
         this.IO = (config.IOList ?? []).reduce((pr, ioName) => {
             pr[ioName] = { 
@@ -54,7 +56,7 @@ export class BaseSectionState < TCellState extends string = CellStateKeys> exten
         const rowsCount = this.Rows.length;
         const colsCount = this.Cols.length;
 
-        this.IsAvailble = AVAILABLE.YES;
+        this.IsAvailable = AVAILABLE.YES;
         this.Status = SECTION_STATUS.IDLE;
         this.Rows = Array.from({ length: rowsCount }, () => LINE_STATE.OK);
         this.Cols = Array.from({ length: colsCount }, () => LINE_STATE.OK);

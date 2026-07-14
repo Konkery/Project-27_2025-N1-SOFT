@@ -34,54 +34,59 @@ export interface IEventStateUpdate {
 }
 
 export interface IEnvSensorParams {
-    Name: string;
-    ChName: string;
+    Name?: string;
+    ChName?: string;
+    TempChName?: string;
+    HumChName?: string;
+    [key: string]: any;
 }
 
 export interface ISectionParams {
     Name: string,
     Id?: string,
     IOList: string[];
-    Size: { rows: number, cols: number };
+    Size?: { rows: number, cols: number };
+    [key: string]: any;
 }
 
 export interface IMainsConfig {
-    VoltageChName: string;
-    VChName: string;
-    PChName: string;
-    WChName: string;
+    VoltageChName?: string;
+    VChName?: string;
+    PChName?: string;
+    WChName?: string;
+    [key: string]: any;
 }
 
 export interface IPsuConfig {
-    Index: number;
-    VinChName: string;
-    VoutChName: string;
-    IoutChName: string;
-    TempChName: string;
-    IsScChName: string;
-    IsOnChName: string;
-    StdResource: number;
+    Index?: number;
+    VinChName?: string;
+    VoutChName?: string;
+    IoutChName?: string;
+    TempChName?: string;
+    IsScChName?: string;
+    IsOnChName?: string;
+    MBID?: number;
+    StdResource?: number;
+    [key: string]: any;
 }
 
 export interface INetConfig {
-    RouterIP?: string;
-    SwPoeIP?: string;
-    Cam1IP?: string;
-    Cam2IP?: string;
-    MqttBrokerIP?: string;
-    RedisIP?: string;
-    MongoIP?: string;
-    GraylogIP?: string;
     [key: string]: any;
 }
 
 export interface IGlobalParams {
     Name: string;
-    StartDate: string;
-    PSU: IPsuConfig[];
+    StartDate?: string;
+    Low?: {
+        PSU?: IPsuConfig[];
+        Env?: IEnvSensorParams[];
+        [key: string]: any;
+    };
+    PSU?: IPsuConfig[];
+    Env?: IEnvSensorParams[];
     Mains?: IMainsConfig;
-    Env: IEnvSensorParams[];
-    Net: INetConfig;
+    Net?: INetConfig;
+    [key: string]: any;
 }
 
 export interface IConfig {
@@ -238,9 +243,11 @@ export interface IPsuState {
 }
 
 export interface IEnvState {
+    T: number;
+    H: number;
     Temp: string;
     Hum: string;
-    [key: string]: string;
+    // [key: string]: string;
 }
 
 export interface IRootState<TSection extends BaseSectionState<any>> {
@@ -266,7 +273,7 @@ class StatesController<TSection extends BaseSectionState<any> = BaseSectionState
     private portServices: IPortService[];
     // Флаг для предотвращения бесконечных циклов (эхо) при обновлении извне
     private _isApplyingExternal: boolean = false;
-    readonly rootTopic: string = 'Machine/';
+    readonly rootTopic: string = 'Machine';
 
     constructor(opts: IConstructorParams<TSection>, config: IConfig) {
         super();
@@ -284,12 +291,18 @@ class StatesController<TSection extends BaseSectionState<any> = BaseSectionState
 
         // Конфигурируемые словари датчиков
         const Env: IEnvState = {
+            T: -1,
+            H: -1,
             Temp: MEAS_STATE.OK,
             Hum: MEAS_STATE.OK,
         };
-        for (const sensor of (config?.Global?.Env ?? [])) {
-            Env[sensor.Name] = MEAS_STATE.OK;
-        }
+        const envSensors = config?.Global?.Low?.Env || config?.Global?.Env || [];
+        // for (const sensor of envSensors) {
+        //     const name = sensor.Name || sensor.TempChName || sensor.HumChName;
+        //     if (name) {
+        //         Env[name] = MEAS_STATE.OK;
+        //     }
+        // }
 
         const Net: INetState = {
             Summary: {
@@ -400,7 +413,7 @@ class StatesController<TSection extends BaseSectionState<any> = BaseSectionState
                 },
                 Env,
                 Net,
-                PSU: (config.Global.PSU || []).map((p) => ({
+                PSU: (config.Global.Low?.PSU || config.Global.PSU || []).map((p) => ({
                     Vin: MEAS_STATE.OK,
                     Vout: MEAS_STATE.OK,
                     Iout: MEAS_STATE.OK,
@@ -458,7 +471,7 @@ class StatesController<TSection extends BaseSectionState<any> = BaseSectionState
         for (let i = 0; i < keys.length - 1; i++) {
             const key = keys[i];
             if (current[key] === undefined) {
-                console.warn(`[State] Unknown path received: ${topic}`);
+                // console.warn(`[State] Unknown path received: ${topic}`);
                 return;
             }
             current = current[key];
@@ -511,7 +524,9 @@ class StatesController<TSection extends BaseSectionState<any> = BaseSectionState
     }
 
     private onUpdate({ prop, state }: { prop: string, state: any }) {
-        const fullTopic = `${this.rootTopic}${prop}`;
+        // debugger;
+        const fullTopic = `${this.rootTopic}/${prop}`;
+        // console.log(fullTopic);
         for (const service of this.portServices) {
             service.Pub(fullTopic, String(state));
         }
@@ -524,6 +539,9 @@ class StatesController<TSection extends BaseSectionState<any> = BaseSectionState
     Reset() {
         for (let section of Object.values(this.Machine.States.Sections)) {
             section.Reset();
+        }
+        for (let port of this.portServices) {
+            port.ClearRetained?.();
         }
     }
 }
