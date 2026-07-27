@@ -5,7 +5,8 @@ import {
     IO_PORT_STATE, IO_STATE, CellStateKeys,
     AVAILABLE, CELL_STATE, 
     SECTION_STATUS, SectionStatusKeys,
-    LINE_STATE, LineStateKeys
+    LINE_STATE, LineStateKeys,
+    TRANSACT_STATE
 } from './srvStates';
 import { ISectionParams } from './srvSectionStateController';
 
@@ -22,8 +23,13 @@ export class BaseSectionState < TCellState extends string = CellStateKeys> exten
     public Status: SectionStatusKeys;
     public Rows: LineStateKeys[];
     public Cols: LineStateKeys[];
-    
     public Cells: TCellState[];
+    public CellsTransact: string[];
+    public Uptime: { 
+        hours: number, 
+        cycles: number, 
+        nominal: number, 
+    };
     public Resourse_available: string[];
     public Resourse_standard: number[];
     public IO: Record<string, TYPE_IO>;
@@ -38,9 +44,14 @@ export class BaseSectionState < TCellState extends string = CellStateKeys> exten
         this.Rows = Array.from({ length: rows }, () => LINE_STATE.OK);
         this.Cols = Array.from({ length: cols }, () => LINE_STATE.OK);
         this.Cells = Array.from({ length: rows * cols }, () => CELL_STATE.OK as TCellState);
+        this.CellsTransact = Array.from({ length: rows * cols }, () => TRANSACT_STATE.OK as string);
         this.Resourse_available = Array.from({ length: rows * cols }, () => AVAILABLE.YES);
         this.Resourse_standard = Array.from({ length: rows * cols }, () => 0);
-
+        this.Uptime = {
+            hours: 0,
+            cycles: 0,
+            nominal: 0,
+        };
         this.IO = (config.IOList ?? []).reduce((pr, ioName) => {
             pr[ioName] = { 
                 state: IO_STATE.OK, 

@@ -8,13 +8,15 @@ import {
     NET_GATEWAY_STATE, NET_ROUTE_STATE, NET_QUALITY_STATE, NET_POE_STATE, 
     NET_CAMERA_SERVICE_STATE, NET_NTP_STATE, NET_DNS_STATE, NET_MQTT_STATE, 
     NET_DB_SERVICE_STATE, NET_NODERED_STATE, NET_GRAYLOG_STATE, NET_SECURITY_STATE, 
-    NET_DEGRADED_STATE, AVAILABLE
+    NET_DEGRADED_STATE, AVAILABLE,
+    CELL_STATE, TRANSACT_STATE, LIFT_STATE, SECTION_STATUS, LINE_STATE, IO_STATE, IO_PORT_STATE
 } from "./srvStates";
 import { createReactiveState } from "./srvReactiveProxy";
+import  { ENUM_DESC_MAP } from "./srvStatesDesc";
 
 export interface IPortService extends EventEmitter2 {
     Init(): Promise<void>;
-    Pub(topic: string, state: string): void;
+    Pub(topic: string, state: string, opts?: object): void;
     Sub(topic: string): void;
     ClearRetained?(): void;
 }
@@ -224,22 +226,29 @@ export interface IMainsState {
     V: number;
     P: number;
     W: number;
+    W_day: number;
+    W_week: number;
+    W_month: number;
 }
 
 export interface IPsuState {
     Vin: string;
+    Vi: number;
     Vout: string;
+    Vo: number;
     Iout: string;
+    I: number;
     Temp: string;
+    T: number;
     IS_SC: string;
     IS_ON: string;
-    Resourse: {
-        Uptime: number;
+    Uptime: { 
         available: string;
-        std: number;
+        hours: number 
+        nominal: number;
+        OVCcount: number;
+        OVTcount: number;
     };
-    OVCcount: number;
-    OVTcount: number;
 }
 
 export interface IEnvState {
@@ -254,17 +263,105 @@ export interface IRootState<TSection extends BaseSectionState<any>> {
     States: {
         Name: string;
         StartDate: string;
-        Uptime: number;
+        Uptime: { hours: number };
         Mode: string;
         Mains: IMainsState;
         Env: IEnvState;
         Net: INetState;
         PSU: IPsuState[];
-        Sections: Record<string, TSection>; 
+        Sections: TSection[]; 
     };
 
     Config: IConfig;
 }
+
+/**
+ * Карта связывания свойств состояния с их оригинальными enum-объектами
+ */
+const PROPERTY_TO_ENUM_MAP: Record<string, object> = {
+    // Global & Machine
+    'Mode': GLOBAL_MACHINE_STATE,
+    'Status': SECTION_STATUS,
+    'IsAvailable': AVAILABLE,
+    'available': AVAILABLE,
+    'IS_SC': AVAILABLE,
+    'IS_ON': AVAILABLE,
+    'Resourse_available': AVAILABLE,
+
+    // Lines & Cells
+    'Rows': LINE_STATE,
+    'Cols': LINE_STATE,
+    'Cells': CELL_STATE,
+    'CellsTransact': TRANSACT_STATE,
+    'Lift': LIFT_STATE,
+    'DeliveryBox': CELL_STATE,
+
+    // Measurements
+    'Voltage': MEAS_STATE,
+    'Vin': MEAS_STATE,
+    'Vout': MEAS_STATE,
+    'Iout': MEAS_STATE,
+    'Temp': MEAS_STATE,
+    'Hum': MEAS_STATE,
+
+    // IO
+    'state': IO_STATE,
+    'ports': IO_PORT_STATE,
+
+    // Network Summary & Devices
+    'Apparatus': NET_SUMMARY_STATE,
+    'LAN': NET_SUMMARY_STATE,
+    'CoreServices': NET_SUMMARY_STATE,
+    'Hubs': NET_SUMMARY_STATE,
+    'Cameras': NET_SUMMARY_STATE,
+    'Logging': NET_SUMMARY_STATE,
+
+    'Router': NET_DEVICE_STATE,
+    'SW_PoE': NET_DEVICE_STATE,
+    'Hub_Low': NET_DEVICE_STATE,
+    'Hub_Mid': NET_DEVICE_STATE,
+    'Hub_Hi': NET_DEVICE_STATE,
+    'Cam1': NET_DEVICE_STATE,
+    'Cam2': NET_DEVICE_STATE,
+
+    // Links & Network Sub-services
+    'Router_Hub_Low': NET_LINK_STATE,
+    'Router_Hub_Mid': NET_LINK_STATE,
+    'Router_Hub_Hi': NET_LINK_STATE,
+    'Router_SW_PoE': NET_LINK_STATE,
+    'SW_PoE_Cam1': NET_LINK_STATE,
+    'SW_PoE_Cam2': NET_LINK_STATE,
+
+    'Plan': NET_IP_STATE,
+    'ARP': NET_ARP_STATE,
+    'Gateway': NET_GATEWAY_STATE,
+
+    'Local': NET_ROUTE_STATE,
+    'Internet': NET_ROUTE_STATE,
+    'VPN': NET_ROUTE_STATE,
+
+    'Cam1_HTTP': NET_CAMERA_SERVICE_STATE,
+    'Cam2_HTTP': NET_CAMERA_SERVICE_STATE,
+    'Cam1_RTSP': NET_CAMERA_SERVICE_STATE,
+    'Cam2_RTSP': NET_CAMERA_SERVICE_STATE,
+
+    'Server': NET_NTP_STATE,
+    'LocalRecords': NET_DNS_STATE,
+    'HubsResolver': NET_DNS_STATE,
+
+    'Clients': NET_MQTT_STATE,
+    'Retained': NET_MQTT_STATE,
+
+    'Delivery_Hubs': NET_GRAYLOG_STATE,
+    'Delivery_Network': NET_GRAYLOG_STATE,
+
+    'UnknownDevice': NET_SECURITY_STATE,
+    'OpenPorts': NET_SECURITY_STATE,
+    'Firewall': NET_SECURITY_STATE,
+    'Credentials': NET_SECURITY_STATE,
+
+    'Degraded': NET_DEGRADED_STATE
+};
 
 class StatesController<TSection extends BaseSectionState<any> = BaseSectionState<any>> extends EventEmitter2 {
 
@@ -403,35 +500,46 @@ class StatesController<TSection extends BaseSectionState<any> = BaseSectionState
             States: {
                 Name: config.Global.Name || 'Unknown',
                 StartDate: config.Global.StartDate || '',
-                Uptime: 0,
+                Uptime: {
+                    hours: 0,
+                    // nominal: 0,
+                    // available: AVAILABLE.YES,
+                    // OVCcount: 0,
+                    // OVTcount: 0,
+                },
                 Mode: GLOBAL_MACHINE_STATE.OK,
                 Mains: {
                     Voltage: MEAS_STATE.OK,
                     V: 220,
                     P: 0,
-                    W: 0
+                    W: 0,
+                    W_day: 0,
+                    W_week: 0,
+                    W_month: 0,
                 },
                 Env,
                 Net,
                 PSU: (config.Global.Low?.PSU || config.Global.PSU || []).map((p) => ({
                     Vin: MEAS_STATE.OK,
+                    Vi: 0,
                     Vout: MEAS_STATE.OK,
+                    Vo: 0,
                     Iout: MEAS_STATE.OK,
+                    I: 0,
                     Temp: MEAS_STATE.OK,
                     IS_SC: AVAILABLE.NO,
                     IS_ON: AVAILABLE.YES,
-                    Resourse: {
-                        Uptime: 0,
-                        available: AVAILABLE.YES,
-                        std: p.StdResource || 0
-                    },
-                    OVCcount: 0,
-                    OVTcount: 0
+                    T: 0,
+                    H: 0,
+                    Uptime: {
+                        available: AVAILABLE.NO,
+                        hours: 0,
+                        OVCcount: 0,
+                        OVTcount: 0,
+                        nominal: 0
+                    }
                 })),
-                Sections: (opts.sections ?? []).reduce((pr, section) => {
-                    pr[section.Name] = section;
-                    return pr;
-                }, {} as Record<string, TSection>),
+                Sections: (opts.sections ?? []),
             },
             
             Config: config
@@ -451,6 +559,13 @@ class StatesController<TSection extends BaseSectionState<any> = BaseSectionState
 
         // Рекурсивно генерируем события update с init = true
         this.emitInitialTree(rawState);
+        /*setTimeout(() => {
+            try {
+                this.PubDescCollection();
+            } catch (e) {
+                console.error(`Не удалось опуликовать список описаний топиков: ${e}`);
+            }
+        }, 0);*/
     }
 
     /**
@@ -543,6 +658,80 @@ class StatesController<TSection extends BaseSectionState<any> = BaseSectionState
         for (let port of this.portServices) {
             port.ClearRetained?.();
         }
+    }
+
+
+
+    /**
+     * Обходит дерево объекта состояния с помощью алгоритма DFS (поиск в глубину)
+     * и сопоставляет свойства с их словарем описаний (STATES_DESC) через ENUM_DESC_MAP.
+     * 
+     * @param targetObj - Объект для обхода (по умолчанию единое дерево состояния Machine)
+     * @returns Список вида [ { prop_path : STATES_DESC }, ... ]
+     */
+    public GetDescCollection(targetObj: any = this.Machine): Array<Record<string, Record<string, string>>> {
+        const collection: Array<Record<string, Record<string, string>>> = [];
+
+        const dfs = (obj: any, currentPath: string[]) => {
+            if (obj === null || obj === undefined) return;
+
+            // Если узел не является объектом, это лист (скалярное значение)
+            if (typeof obj !== 'object') {
+                const desc = this.resolveDescForPath(currentPath);
+                if (desc) {
+                    const propPath = currentPath.join('/');
+                    collection.push({ [propPath]: desc });
+                }
+                return;
+            }
+
+            // Итерируемся по ключам массива или объекта
+            const keys = Array.isArray(obj) 
+                ? Array.from({ length: obj.length }, (_, i) => String(i)) 
+                : Object.keys(obj);
+
+            for (const key of keys) {
+                // Пропускаем приватные/служебные поля
+                if (key.startsWith('_')) continue;
+
+                const value = obj[key];
+                // Пропускаем функции/методы
+                if (typeof value === 'function') continue;
+
+                dfs(value, [...currentPath, key]);
+            }
+        };
+
+        dfs(targetObj, []);
+        return collection;
+    }
+
+    PubDescCollection() {
+        const descCollection = this.GetDescCollection();
+        const assignedCollection = descCollection.reduce((pr, curr) => Object.assign(pr, curr), {});
+        for (let [topic, statesDescEnum] of Object.entries(assignedCollection)) {
+            for (let [state, stateDesc] of Object.entries(statesDescEnum))
+            this.portServices[0].Pub(`Metadata/${topic}__${state}`, stateDesc, { retain: false });
+            // for (let [key, flagDesc] of Object.entries(descCollection)) {}
+        }
+    }
+
+    /**
+     * Извлекает словарь описаний по свойству через связку PROPERTY_TO_ENUM_MAP -> ENUM_DESC_MAP
+     */
+    private resolveDescForPath(path: string[]): Record<string, string> | null {
+        if (path.length === 0) return null;
+
+        const lastKey = path[path.length - 1];
+        const isNumericIndex = !isNaN(Number(lastKey));
+        const propName = isNumericIndex && path.length > 1 ? path[path.length - 2] : lastKey;
+
+        // 1. Извлекаем оригинальный enum-объект по имени свойства
+        const enumObj = PROPERTY_TO_ENUM_MAP[propName];
+        if (!enumObj) return null;
+
+        // 2. Получаем соответствующий словарь описаний напрямую из ENUM_DESC_MAP
+        return ENUM_DESC_MAP.get(enumObj) || null;
     }
 }
 

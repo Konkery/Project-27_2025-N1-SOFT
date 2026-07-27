@@ -24,7 +24,14 @@ export const CELL_STATE = {
     ERR_MECHANICAL: 'ERR_MECHANICAL',
     // Legacy support:
     OVERLOAD: 'OVERLOAD',
-    TAMPER_ERROR: 'TAMPER_ERROR',
+} as const;
+
+export const TRANSACT_STATE = {
+    OK: 'OK',
+    EXECUTING: 'EXECUTING',
+    COMPLETED: 'COMPLETED',
+    WARNING: 'WARNING',
+    // SERVICE: 'SERVICE',
 } as const;
 
 export type CellStateKeys = typeof CELL_STATE[keyof typeof CELL_STATE];
@@ -38,9 +45,6 @@ export const LIFT_STATE = {
     ERR_TAMPER: 'ERR_TAMPER',
     ERR_LEVEL: 'ERR_LEVEL',
     ERR_MECHANICAL: 'ERR_MECHANICAL',
-    // Legacy support:
-    TAMPER_ERROR: 'TAMPER_ERROR',
-    LEVEL_ERROR: 'LEVEL_ERROR',
 } as const;
 
 export type LiftStateKeys = typeof LIFT_STATE[keyof typeof LIFT_STATE];
@@ -48,6 +52,8 @@ export type LiftStateKeys = typeof LIFT_STATE[keyof typeof LIFT_STATE];
 export const SECTION_STATUS = {
     IDLE: 'IDLE',
     DISPENSE: 'DISPENSE',
+    DELIVERY: 'DELIVERY',
+    BLOCKED: 'BLOCKED',
     LOADING: 'LOADING'
 } as const;
 
