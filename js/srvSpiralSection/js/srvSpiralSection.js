@@ -6,7 +6,7 @@ const { ClassFault } = require('./srvUtils');
 const { FAULTS, STORAGE_CONSTANSTS, BOX_CONSTANTS } = require('./SpiralSectionConstants');
 const { default: BaseSectionState } = require("../../srvStatesController/js/srvBaseSectionState");
 const ClassDeliveryBox = require("./srvDelieveryBox");
-const { AVAILABLE, SECTION_STATUS } = require("../../srvStatesController/js/srvStates");
+const { AVAILABLE_STATE, SECTION_STATUS } = require("../../srvStatesController/ts/IBaseSectionStates");
 const { default: SpiralSectionState } = require("./srvSpiralSectionStates");
 
 let sleep = require('timers/promises').setTimeout;
@@ -64,7 +64,7 @@ class ClassSpiralSection extends EventEmitter2 {
      * @param {SpiralSectionState} param0.sectionState
      * @param {import("./srvSpiralSection.d.ts").TypeProxyLogger} param0.ProxyLogger
      */
-    constructor({ ProxyCh, channels, advOpts, sectionState, ProxyLogger }) {
+    constructor({ ProxyCh, channels, advOpts, sectionState, ProxyLogger={ Log: (o)=>console.log(o) } }) {
         super();
         this.#_ProxyCh = ProxyCh;
         this.#_Channels = channels;
@@ -87,7 +87,8 @@ class ClassSpiralSection extends EventEmitter2 {
             DISPENSE_START: 'OPERATION_START',
             OPERATION_FINISHED: 'DISPENSE_DONE',
             UNLOADING_DONE: 'UNLOADING_DONE',
-            DISPENSE_START_MOCK: 'DISPENSE_START_MOCK'
+            DISPENSE_START_MOCK: 'DISPENSE_START_MOCK',
+            INTERRUPT: 'INTERRUPT'
         }
     }
 
@@ -101,8 +102,31 @@ class ClassSpiralSection extends EventEmitter2 {
         this.#_Storage.Events.on('dispense', this._DispenseHandler);
         this._FailHandler = ((cell, fault) => this.HandleFail(cell, fault, 'Не удалось выполнить выдачу ТМЦ')).bind(this);
         this.#_Storage.Events.on('fail', this._FailHandler);
+        
+        this.WatchDoor();
+        this.WatchBox();
 
-        this.#_SectionState.IsAvailable = AVAILABLE.YES;
+        this.#_SectionState.IsAvailable = AVAILABLE_STATE.YES;
+    }
+
+    WatchDoor() {
+        let cachedDoorValue = undefined;
+
+        this.#_ProxyCh.Events.on(`${this.#_Channels.door}-value`, (({ Value }) => {
+
+            if (Value === cachedDoorValue)
+                return;
+
+            cachedDoorValue = Value;
+
+            if (Value != BOX_CONSTANTS.BOX_CLOSED) {
+                this.#_FSM.Dispatch(this.EVENTS.INTERRUPT);
+            }
+        }).bind(this));
+    }
+
+    WatchBox() {
+        this.#_Box.on(ClassDeliveryBox.EVENTS.CLOSED, (() => this.#_FSM.Dispatch(this.EVENTS.INTERRUPT)).bind(this));
     }
 
     /**
@@ -120,7 +144,7 @@ class ClassSpiralSection extends EventEmitter2 {
 
             this._Context.currentTask = { res, rej };
             this.#_SectionState.Status = SECTION_STATUS.DISPENSE;
-            this.#_SectionState.IsAvailable = AVAILABLE.NO;
+            this.#_SectionState.IsAvailable = AVAILABLE_STATE.NO;
             this.#_FSM.Dispatch(this.EVENTS.DISPENSE_START, _orders);
         });
     }
@@ -133,10 +157,10 @@ class ClassSpiralSection extends EventEmitter2 {
     async _Execute(_orders) {
         try {
             this.#_SectionState.Status = SECTION_STATUS.DISPENSE;
-            /*if (!this.IsDoorClosed() || this.#_Box.IsOpened)
+            if (!this.IsDoorClosed() || this.#_Box.IsOpened)
                 return this.HandleFail(undefined, new ClassFault({ code: FAULTS.DOOR_OPENED }), 'Отказ в начале транзакции');
-            */
-           let orders = [..._orders];
+            
+            let orders = [..._orders];
             orders.sort((a, b) => a.row - b.row);   //сортировка по убыванию уровня
 
             try {
@@ -172,7 +196,7 @@ class ClassSpiralSection extends EventEmitter2 {
                 for (let order of ordersOnLevel) {
                     await sleep(DELAY_BEFORE_DISPENSE);
                     if (this.#_Storage.IsCheckable(order)) {
-                        this._ProxyLogger.Log({ level: 'I', msg: `Order: ${JSON.stringify(order)}` });
+                        this._ProxyLogger.Log({ level: 'I', msg: `Начало выполения заказа: ${JSON.stringify(order)}` });
                         try {
                             await this.#_Storage.Dispense(order);
                             this._ProxyLogger.Log({ level: 'I', msg: `[STORAGE] Выполнена выдача ${JSON.stringify(order)}` });
@@ -198,6 +222,7 @@ class ClassSpiralSection extends EventEmitter2 {
             if (this._Context.dispensedAtLeastOnce && this.#_Lift.Level == 0) try {
                 this.#_SectionState.Status = SECTION_STATUS.DELIVERY;
                 await this.#_Box.Deliver();
+                this._ProxyLogger.Log({ level: 'I', msg: 'Успешно выполнена выдача' });
 
             } catch (e) {
                 this.#_SectionState.Status = SECTION_STATUS.BLOCKED;
@@ -205,7 +230,7 @@ class ClassSpiralSection extends EventEmitter2 {
             }
             
         } catch (e) {
-            this.HandleErr(e, 'Ошибка выполнении транзакции');
+            this.HandleErr(e, 'Ошибка выполнения транзакции');
         } finally {
             this._Context.dispensedAtLeastOnce = false;
             return this.#_FSM.Dispatch(this.EVENTS.OPERATION_FINISHED);
@@ -227,7 +252,7 @@ class ClassSpiralSection extends EventEmitter2 {
         } finally {
             if (this.#_SectionState.Status != SECTION_STATUS.BLOCKED) {
                 this.#_SectionState.Status = SECTION_STATUS.IDLE;
-                this.#_SectionState.IsAvailable = AVAILABLE.YES;
+                this.#_SectionState.IsAvailable = AVAILABLE_STATE.YES;
             }
         }
     }
@@ -252,7 +277,7 @@ class ClassSpiralSection extends EventEmitter2 {
         // this.#_Storage.Events.off('fail', this._FailHandler);
 
         this.#_SectionState.Status = SECTION_STATUS.IDLE;
-        this.#_SectionState.IsAvailable = AVAILABLE.YES;
+        this.#_SectionState.IsAvailable = AVAILABLE_STATE.YES;
     }
 
     HandleDispense(cell) {
@@ -269,12 +294,13 @@ class ClassSpiralSection extends EventEmitter2 {
      * @param {*} message 
      */
     HandleFail(cell, fault, message='') {
-        this.emit('fail', cell, fault, message);
+        this._ProxyLogger.Log({ level: 'E', msg: `[FAIL] ${message}: ${JSON.stringify(fault)}` });
+        this.emit('result', { cell, fault, message });
     }
 
     HandleErr(e, msg) {
-        this._ProxyLogger.Log({ level: 'E', msg: `[ERROR] ${msg}` });
-        this.emit('error', e, msg='');
+        this._ProxyLogger.Log({ level: 'E', msg: `[ERROR] ${msg}: ${JSON.stringify(e)}` });
+        this.emit('result', { error: e, message: msg ?? '' });
     }
 
     Invoke(methodName, ...args) {

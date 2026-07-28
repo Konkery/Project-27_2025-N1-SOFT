@@ -5,6 +5,10 @@ export interface TypeProxyCh {
     Events: EventEmitter2;
 }
 
+export interface TypeProxyLogger {
+    Log: (args: { level: string; msg: string; obj?: any }) => void;
+}
+
 export interface TypeDeliveryBoxChannels {
     lock: string;
     optic: string;
@@ -27,6 +31,7 @@ export interface TypeSpiralSectionEvents {
     OPERATION_FINISHED: string;
     UNLOADING_DONE: string;
     DISPENSE_START_MOCK: string;
+    INTERRUPT: string;
 }
 
 export interface TypeOrder {
