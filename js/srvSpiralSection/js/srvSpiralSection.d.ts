@@ -31,7 +31,7 @@ export interface TypeSpiralSectionEvents {
     OPERATION_FINISHED: string;
     UNLOADING_DONE: string;
     DISPENSE_START_MOCK: string;
-    INTERRUPT: string;
+    ABORT: string;
 }
 
 export interface TypeOrder {
