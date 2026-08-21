@@ -1,8 +1,9 @@
 const { EventEmitter2 } = require("eventemitter2");
 const { createTimer, ClassFault: Fault, isWithinTolerance } = require("./srvUtils");
 const { ClassFSM: FSM } = require("./srvFSM");
-const { LIFT_CONSTANTS, FAULTS, STORAGE_CONSTANSTS, U_TRANSACTIONS } = require("./SpiralSectionConstants");
-const { LIFT_STATE, default: SpiralSectionState } = require("./srvSpiralSectionStates");
+const { LIFT_CONSTANTS, FAULTS, STORAGE_CONSTANSTS, U_TRANSACTIONS, COMMON_CONSTANTS } = require("./SpiralSectionConstants");
+const { /*LIFT_STATE,*/ default: SpiralSectionState } = require("./srvSpiralSectionStates");
+const { LIFT_STATE } = require('../../srvStatesController/ts/ISpiralSectionStates')
 const { default: StatesController } = require("../../srvStatesController/js/srvSectionStateController");
 const ClassBuffer = require('../../../../HorizonServer/js/srvUtils/js/buffer');
 let sleep = require('timers/promises').setTimeout;
@@ -15,7 +16,7 @@ const { LIFT_BOTTOM_TAMPER_ON,
     MONITOR_INTERVAL } = LIFT_CONSTANTS;
 
 const BOTTOM_LEVEL = 0;
-const SLEEP_BETWEEN_STEPS = 300;
+const SLEEP_BETWEEN_STEPS = 500;
 
 class ClassSpiralSectionLift {
     static STATE = {
@@ -54,15 +55,18 @@ class ClassSpiralSectionLift {
         [ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM] : {
             [this.EVENTS.BOTTOM_LEVEL_REACHED]: { state: ClassSpiralSectionLift.STATE.IDLE,                action: this.Idle.bind(this) },
             [this.EVENTS.ELEVATE_TIMEOUT]:      { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM, action: this.OnElevateTimeout.bind(this) },
-            [this.EVENTS.FAULT]:                { state: ClassSpiralSectionLift.STATE.FAULT,               action: this.OnFault.bind(this)}
+            [this.EVENTS.FAULT]:                { state: ClassSpiralSectionLift.STATE.FAULT,               action: this.OnFault.bind(this) },
+            [this.EVENTS.ABORT]:                { state: ClassSpiralSectionLift.STATE.IDLE,                action: this.StopForce.bind(this) },
         }, 
         [ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT]: {
             [this.EVENTS.COLLECT_LEVEL_REACHED]: { state: ClassSpiralSectionLift.STATE.IDLE,                 action: this.Idle.bind(this) },
             [this.EVENTS.ELEVATE_TIMEOUT]:       { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT, action: this.OnElevateTimeout.bind(this) },
-            [this.EVENTS.FAULT]:                 { state: ClassSpiralSectionLift.STATE.FAULT,                action: this.OnFault.bind(this)}
+            [this.EVENTS.FAULT]:                 { state: ClassSpiralSectionLift.STATE.FAULT,                action: this.OnFault.bind(this) },   
+            [this.EVENTS.ABORT]:                 { state: ClassSpiralSectionLift.STATE.IDLE,                 action: this.Idle.bind(this) },
         },
         [ClassSpiralSectionLift.STATE.FAULT]: {
             [this.EVENTS.ELEVATE_TO_BOTTOM_COMMAND]: { state: ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM,  action: this._ElevateToBottom.bind(this) },
+            [this.EVENTS.RECOVERED]:                 { state: ClassSpiralSectionLift.STATE.IDLE, action: () => {} }
         }
     };
     #_FSM = new FSM({ stateGraph: this.#_StatesGraph, defaultState: ClassSpiralSectionLift.STATE.IDLE, onStateChanged: this.OnStateChanged.bind(this) });
@@ -86,8 +90,8 @@ class ClassSpiralSectionLift {
         this.#_GlobalState = globalState;
         this.#_SectionState = sectionState;
         this._BusNumber = advOpts.busNumber;
-        this._I_CurrBuffer = new ClassBuffer({ size: 1 });
-        this._V_VoltBuffer = new ClassBuffer({ size: 3 });
+        this._I_CurrBuffer = new ClassBuffer({ size: 5 });
+        this._V_VoltBuffer = new ClassBuffer({ size: 4 });
 
         this.Init();
     }
@@ -107,6 +111,7 @@ class ClassSpiralSectionLift {
             ELEVATE_TIMEOUT:        'ELEVATE_TIMEOUT',
             FAULT:                  'FAULT',
             RECOVERED:              'RECOVERED',
+            ABORT:                  'ABORT'
         });
     }
 
@@ -122,11 +127,8 @@ class ClassSpiralSectionLift {
         return this.#_Context.currentLevel;
     }
 
-    get MotorOk() {
-        return this.Status == LIFT_STATE.OK || 
-            this.Status == LIFT_STATE.ERR_TAMPER || 
-            this.Status == LIFT_STATE.ERR_LEVEL || 
-            this.Status == LIFT_STATE.OVERLOAD 
+    get Available() {
+        return this.Status != LIFT_STATE.SHORT_CIRCUIT && this.Status != LIFT_STATE.OVERLOAD;
     } 
 
     get Events() {
@@ -138,9 +140,9 @@ class ClassSpiralSectionLift {
         this.InitEventHandlers();
         this.Stop()
             .catch(e => this._ProxyLogger.Log({ level: 'E', msg: '[LIFT] Не удалось выполнить Reset мотора', obj: { error: e } }))
-            .then(() => {
-                this.ElevateToBottom().catch(e => this._ProxyLogger.Log({ level: 'E', msg: '[LIFT] Не удалось установить лифт в нижнее положение', obj: { error: e } }));
-            });
+            // .then(() => {
+            //     this.ElevateToBottom().catch(e => this._ProxyLogger.Log({ level: 'E', msg: '[LIFT] Не удалось установить лифт в нижнее положение', obj: { error: e } }));
+            // });
 
     }
 
@@ -149,6 +151,7 @@ class ClassSpiralSectionLift {
         this.SetLevelHandler();
         this.SetTopTamperHandler();
         this.SetCurrentHandler();
+        this.SetVoltageHandler();
         this.StartPSUWatch();
     }
 
@@ -161,7 +164,7 @@ class ClassSpiralSectionLift {
         const handler = (({ Value }) => {
             if (Value != tamperCachedValue && Value == LIFT_BOTTOM_TAMPER_ON && !debounce) {
                 this.#_Context.timer?.clear();
-                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] обновлен сигнал на нижнем тампере: ${Value}` });
+                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Обновлен сигнал на нижнем тампере: ${Value}` });
                 debounce = setTimeout(() => {
                     debounce = null;
                 }, LIFT_BOTTOM_TAMPER_DEBOUNCE);
@@ -183,16 +186,12 @@ class ClassSpiralSectionLift {
         const handler = (({ Value }) => {
             if (Value != tamperCachedValue && Value == LIFT_BOTTOM_TAMPER_ON && !debounce) {
                 this.#_Context.timer?.clear();
-                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] обновлен сигнал на верхнем тампере: ${Value}` });
+                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Обновлен сигнал на верхнем тампере: ${Value}` });
                 debounce = setTimeout(() => {
                     debounce = null;
                 }, LIFT_BOTTOM_TAMPER_DEBOUNCE);
 
                 this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL }));
-
-                /*this.Stop()
-                    .then(() => this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL })))*/
-                    // .catch(fault => this.#_FSM.Dispatch(this.EVENTS.FAULT, fault));
             };
             tamperCachedValue = Value;
         }).bind(this);
@@ -211,16 +210,27 @@ class ClassSpiralSectionLift {
     SetCurrentHandler() {
         const I_currEventName = `${this.#_Channels.current}-value`;
         const I_currHandler = (({ Value }) => {
-            if (![ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT, 
-                ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE, 
-                ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM].includes(this.#_FSM.State)) return;
-            
             this._I_CurrBuffer.push(Value);
 
         }).bind(this);
 
         this.#_ProxyCh.Events.on(I_currEventName, I_currHandler);
         this.#_ChHandlers.set(I_currEventName, I_currHandler);
+    }
+
+    SetVoltageHandler() {
+        const V_EventName = `${this.#_Channels.voltage}-value`;
+        const V_Handler = (({ Value }) => {
+            // if (![ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT, 
+            //     ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE, 
+            //     ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM].includes(this.#_FSM.State)) return;
+            
+            this._V_VoltBuffer.push(Value);
+
+        }).bind(this);
+
+        this.#_ProxyCh.Events.on(V_EventName, V_Handler);
+        this.#_ChHandlers.set(V_EventName, V_Handler);
     }
 
     HandleLevel({ Value }) {
@@ -232,10 +242,9 @@ class ClassSpiralSectionLift {
                 this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE ||
                 this.#_FSM.State == ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM
             ) {
-                let motorState = this.#_ProxyCh.GetValue(this.#_Channels.liftMotorCtrl);
-                if (motorState.cmd == 'Forward')
+                if (this.#_Context.movingDir == 1)
                     this.#_Context.currentLevel++;
-                if (motorState.cmd == 'Reverse')
+                else
                     this.#_Context.currentLevel--;
 
                 this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Уровень лифта: ${this.#_Context.currentLevel}` });
@@ -246,6 +255,7 @@ class ClassSpiralSectionLift {
                 } 
             }  
             this.nopower_count = 0;
+            this.overload_count = 0;
             this.#_Context.timer?.reset();
         }
     }
@@ -253,10 +263,18 @@ class ClassSpiralSectionLift {
     StartPSUWatch() {
         if (this.#_PSUWatch) clearInterval(this.#_PSUWatch);
         
-        let short_count = 0;
+        this.short_count = 0;
         this.nopower_count = 0;
+        this.overload_count = 0;
+
+        let prevStatus = this.#_SectionState.Lift;
 
         this.#_PSUWatch = setInterval(() => {
+            if (this.State == ClassSpiralSectionLift.STATE.FAULT) {
+                if (prevStatus != LIFT_STATE.OK && this.#_SectionState.Lift == LIFT_STATE.OK)
+                    this.#_FSM.Dispatch(this.EVENTS.RECOVERED);
+                prevStatus = this.#_SectionState.Lift;
+            }
             if (![ClassSpiralSectionLift.STATE.ELEVATING_TO_COLLECT, 
                 ClassSpiralSectionLift.STATE.ELEVATING_TO_BASE, 
                 ClassSpiralSectionLift.STATE.ELEVATING_TO_BOTTOM].includes(this.#_FSM.State)) return;
@@ -269,36 +287,47 @@ class ClassSpiralSectionLift {
 
             let index = this.#_Context.currentOrder?.unitIndex;
 
-            // console.log(JSON.stringify({ state: this.#_FSM.State, I_curr, I_im: this.#_ProxyCh.GetValue(this.#_Channels.current), I_currState}));
+            this._ProxyLogger.Log({ level: 'D', msg: JSON.stringify({ state: this.#_FSM.State, I_curr }) });
 
             switch (I_currState) {
                 case ELECTR_CURR_STATE.SHORT:
-                    if (this.#_SectionState.Cells[index] != LIFT_STATE.SHORT_CIRCUIT) {
-                        if (++this.short_count == 3) {
-                            this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Мониторинг выявил КЗ. Ток: ${I_curr?.toFixed?.(2)}` });
-                            this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index }));
-                        }
+                    // if (this.#_SectionState.Cells[index] != LIFT_STATE.SHORT_CIRCUIT) {
+                    if (++this.short_count == 2) {
+                        this.short_count = 0;
+                        this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Мониторинг выявил КЗ. Ток: ${I_curr?.toFixed?.(2)}` });
+                        this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, index }));
+                    } else {
+                        this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Мониторинг выявил возможное КЗ. Ток: ${I_curr?.toFixed?.(2)}` });
                     }
                     break;
 
                 case ELECTR_CURR_STATE.OVERLOAD:
-                    if (this.#_SectionState.Lift == LIFT_STATE.OK)
+                    ++this.overload_count;
+                    if (this.overload_count == 2 && this.#_SectionState.Lift == LIFT_STATE.OK) {
                         this.#_SectionState.Lift = LIFT_STATE.OVERLOAD;
+                        this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Мониторинг выявил перегрузку. Ток: ${I_curr?.toFixed?.(2)}` });
+                        this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.LIFT_OVERLOAD, index }));
+                    } else {
+                        this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Мониторинг выявил возможную перегрузку. Ток: ${I_curr?.toFixed?.(2)}` });
+                    }
+        
                     break;
 
-                case ELECTR_CURR_STATE.IDLE:
-                    if (this.#_SectionState.Cells[index] != LIFT_STATE.NO_POWER) {
+                /*case ELECTR_CURR_STATE.IDLE:
+                    if (this.#_SectionState.Cells[index] != LIFT_STATE.SHORT_CIRCUIT) {
                         if (++this.nopower_count == 3) {
+                            this.nopower_count = 0;
                             this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Мониторинг выявил отсутствие питания. Ток: ${I_curr?.toFixed?.(2)}` });
                             this.#_FSM.Dispatch(this.EVENTS.FAULT, new Fault({ code: FAULTS.ACTUATOR_NO_POWER, index }));
                         }
                     }
-                    break;
+                    break;*/
 
                 case ELECTR_CURR_STATE.WORK_OK:
                     this.#_SectionState.Lift = LIFT_STATE.OK;
                     this.nopower_count = 0;
-                    short_count = 0;
+                    this.short_count = 0;
+                    this.overload_count = 0;
                 }
 
             // const V_voltage = this._V_VoltBuffer.Filter();
@@ -317,6 +346,10 @@ class ClassSpiralSectionLift {
         return new Promise((res, rej) => {
             if (this.#_Context.currentTask)
                 return rej('[LIFT] Выполняется предыдущая операция');
+            
+            if (!this.Available)
+                return rej(`[LIFT] Статус лифта не позволяет начать новую операцию: ${this.Status}`)
+            
             this.#_uTransactionsList = [];
             this.#_Context.currentTask = { res, rej };
 
@@ -331,12 +364,14 @@ class ClassSpiralSectionLift {
         });
     }
 
-    EmergencyOff() {}
-
     async ElevateToLevel(requiredLevel) {
         return new Promise((res, rej) => {
             if (this.#_Context.currentTask)
                 return rej('[LIFT] Выполняется предыдущая операция');
+            
+            if (!this.Available)
+                return rej(`[LIFT] Статус лифта не позволяет начать новую операцию: ${this.Status}`)
+            
             this.#_uTransactionsList = [];
             this.#_Context.currentTask = { res, rej };
 
@@ -451,61 +486,49 @@ class ClassSpiralSectionLift {
         this.#_Context.motorTransition = true;
 
         let fwd = cmd == 'Forward';
-        await this.StopForce();
+        this.StopForce();
         
-        // await sleep(SLEEP_BETWEEN_STEPS);
+        await sleep(100);
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         if (current_0 >= CURRENT_RANGE.WORK_OK[0]) 
             throw new Fault({ code: FAULTS.LIFT_CTRL_UNDEFINED, critical: true });
 
-        this.#_uTransactionsList.push(fwd ? U_TRANSACTIONS.LIFT_CONNECT_GND_FWD : U_TRANSACTIONS.LIFT_CONNECT_GND_REV);  
-        let step = 1;
-        await this.MotorStep(cmd, { step });
+        this.LogTransaction(fwd ? U_TRANSACTIONS.LIFT_FWD : U_TRANSACTIONS.LIFT_REV);
         
-        await sleep(SLEEP_BETWEEN_STEPS);
+        // step = 2;
+        this.#_ProxyCh.SetValue(this.#_Channels.liftMotorCtrl2, fwd ? 'UP' : 'DOWN');
+        // this.MotorStep(cmd, { step: 2 });
 
-        if (this.IsShorted())
-            throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+        let current_2;
+        let elapsed = 0;
 
-        let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-        if (!isWithinTolerance(current_0, current_1, 0.1)) {   // пробой 
-            this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Ток значительно вырос (${current_0} -> ${current_1}) после Первого шага включения лифта` });
-            throw new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
+        while (elapsed < SLEEP_BETWEEN_STEPS) {
+            await sleep(50);
+            elapsed += 50;
+
+            current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+            this._ProxyLogger.Log({ level: 'D', msg: `I = ${current_2}` });
+            // ток обновился
+            if (current_2 >= CURRENT_RANGE.WORK_OK[0]) {
+                this._ProxyLogger.Log({ level: 'D', msg: `Ток обновился до ${current_2.toFixed(2)} спустя ~${elapsed} мс` })
+                this.#_Context.movingDir = fwd ? 1 : -1;
+                this.#_Context.motorTransition = false;
+                return;
+            }
+
+            if (this.IsShorted()) {
+                this._ProxyLogger.Log({ level: 'E', msg: `[LIFT] КЗ при включении: I=${this.#_ProxyCh.GetValue(this.#_Channels.current)} Iavg=${this._I_CurrBuffer.Filter()} U=${this._V_VoltBuffer.Filter()}` })
+                throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+            }
         }
+        // ток не обновился
+        this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Ток не изменился после второго шага включения лифта ${current_0} -> ${current_2}` });
+        throw new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true });
+    }
 
-        this.#_uTransactionsList.push(fwd ? U_TRANSACTIONS.LIFT_CONNECT_V_PLUS_FWD : U_TRANSACTIONS.LIFT_CONNECT_V_PLUS_REV);
-        step = 2;
-        await this.MotorStep(cmd, { step });
-
-        (async () => {
-            
-            let current_2;
-            let elapsed = 0;
-
-            while (elapsed < SLEEP_BETWEEN_STEPS) {
-                await sleep(100);
-                elapsed += 100;
-
-                if (this.IsShorted()) {
-                    throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
-                }
-
-                current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
-                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] I = ${current_2}` });
-                // ток обновился
-                if (!isWithinTolerance(current_1, current_2, 0.1)) {
-                    break; 
-                }
-            }
-            // ток не обновился
-            if (isWithinTolerance(current_1, current_2, 0.1)) {
-                this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Ток не изменился после второго шага включения лифта ${current_1} -> ${current_2}` });
-                throw new Fault({ code: FAULTS.LIFT_NO_POWER, critical: true });
-            }
-        }).bind(this)().catch((f => this.#_FSM.Dispatch(this.EVENTS.FAULT, f)).bind(this));
-
-        this.#_Context.movingDir = fwd ? 1 : -1;
-        this.#_Context.motorTransition = false;
+    LogTransaction(transName) {
+        this.#_uTransactionsList.push(transName);  
+        this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] ${transName}` });   
     }
 
     /**
@@ -549,11 +572,11 @@ class ClassSpiralSectionLift {
      * @param {number} step 
      * @returns {Promise}
      */
-    async MotorStep(cmd, { step }) {
+    MotorStep(cmd, { step }) {
         this.#_ProxyCh.SetValue(
             this.#_Channels.liftMotorCtrl, { cmd, args: [{ step }] })
 
-        let step1Response = await this.#_ProxyCh.Events.waitFor(`${this.#_Channels.liftMotorCtrl}-value`, {
+        /*let step1Response = await this.#_ProxyCh.Events.waitFor(`${this.#_Channels.liftMotorCtrl}-value`, {
             timeout: LIFT_CONSTANTS.MOTOR_RES_MAX_TIME, 
         }).catch(() => {
             this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Motor error: no response from "${this.#_Channels.liftMotorCtrl} on step ${step}"` });
@@ -562,7 +585,7 @@ class ClassSpiralSectionLift {
         if (step1Response[0].Value.error) {
             // throw new Error(stepResponse[0].Value.error);
             throw new Fault({ code: FAULTS.IO_DRIVER_ERR, critical: true });
-        }
+        }*/
     }
 
     /**
@@ -571,58 +594,98 @@ class ClassSpiralSectionLift {
     async Stop() {
         let current_0 = this.#_ProxyCh.GetValue(this.#_Channels.current);
         let isIdle = current_0 < CURRENT_RANGE.WORK_OK[0]
-        this.#_uTransactionsList.push(this.#_Context.movingDir > 0 ? U_TRANSACTIONS.LIFT_DISCONNECT_V_PLUS_FWD : U_TRANSACTIONS.LIFT_DISCONNECT_V_PLUS_REV);
+        const fwd = this.#_Context.movingDir > 0;
+        this.LogTransaction(fwd ? U_TRANSACTIONS.LIFT_STOP_AFTER_FWD : U_TRANSACTIONS.LIFT_STOP_AFTER_REV);
         let step = 1;
-        await this.MotorStep('Off', { step });
+        this.#_ProxyCh.SetValue(this.#_Channels.liftMotorCtrl2, 'STOP');
+        // this.MotorStep('Off', { step });
+        let elapsed = 0;
+        let current_1;
+        while (elapsed < SLEEP_BETWEEN_STEPS) {
+            await sleep(50);
+            elapsed += 50;
         
-        await sleep(SLEEP_BETWEEN_STEPS);
-        
-        if (this.IsShorted())
-            throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
+            if (!this.InBottomPos() && this.IsShorted())
+                throw new Fault({ code: FAULTS.LIFT_SHORT_CIRCUIT, critical: true });
 
-        let current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
+            current_1 = this.#_ProxyCh.GetValue(this.#_Channels.current);
 
-        if (!isIdle && isWithinTolerance(current_0, current_1, 0.1)) {
-            this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Ток не пропал (${current_0} -> ${current_1}) после Остановки лифта` });
-            throw new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
+            if (current_1 < CURRENT_RANGE.WORK_OK[0]) {
+                this.#_Context.movingDir = 0;
+                return;
+            }
         }
-        
-        step = 2;
-        await this.MotorStep('Off', { step });
+        this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] Ток не пропал (${current_0} -> ${current_1}) после Остановки лифта` });
+        throw new Fault({ code: FAULTS.IO_PORT_ERR, critical: true });
+    }
 
-        this.#_uTransactionsList.push(this.#_Context.movingDir > 0 ? U_TRANSACTIONS.LIFT_DISCONNECT_GND_FWD : U_TRANSACTIONS.LIFT_DISCONNECT_GND_REV);
+    StopForce() {
+        this.LogTransaction(this.#_Context.movingDir > 0 ? U_TRANSACTIONS.LIFT_STOP_AFTER_FWD : U_TRANSACTIONS.LIFT_STOP_AFTER_REV);
+        
+        this.#_ProxyCh.SetValue(this.#_Channels.liftMotorCtrl2, 'STOP');
+        // this.MotorStep('Off', { step: 2 });
+
         this.#_Context.movingDir = 0;
     }
 
-    async StopForce() {
-        this.#_uTransactionsList.push(this.#_Context.movingDir > 0 ? U_TRANSACTIONS.LIFT_DISCONNECT_V_PLUS_FWD : U_TRANSACTIONS.LIFT_DISCONNECT_V_PLUS_REV);
-        let step = 1;
-        await this.MotorStep('Off', { step });
-        
-        await sleep(SLEEP_BETWEEN_STEPS);
-        
-        step = 2;
-        await this.MotorStep('Off', { step });
-        this.#_uTransactionsList.push(this.#_Context.movingDir > 0 ? U_TRANSACTIONS.LIFT_DISCONNECT_GND_FWD : U_TRANSACTIONS.LIFT_DISCONNECT_GND_REV);
-        this.#_Context.movingDir = 0;
-    }
-
+    /**
+     * 
+     * @param {import('./srvUtils.js').ClassFault} fault 
+     */
     async OnFault(fault) {
+        this.#_Context.timer?.clear?.();
+        this._ProxyLogger.Log({ level: 'I', msg: `Fault: ${fault.code}` });
+        this.UpdateStatus(fault);
         try {
-            await this.Stop();
+            if (fault.code == FAULTS.LIFT_SHORT_CIRCUIT && this.#_Channels.psuWork) {
+                this.OffPSU();
+                this.StopForce();
+                await sleep(SLEEP_BETWEEN_STEPS/2);
+                this.OnPSU();
+                this._V_VoltBuffer.Clear();
+                this._I_CurrBuffer.Clear();
+                let recovered = false;
+                let elapsed = 0;
+                while (elapsed < 5000) {
+                    await sleep(SLEEP_BETWEEN_STEPS);
+                    elapsed += SLEEP_BETWEEN_STEPS;
+                    this._ProxyLogger.Log({ level: 'I', msg: `[STORAGE] Попытка восстановления: Iavg=${this._I_CurrBuffer.Filter()} V=${this._V_VoltBuffer.Filter()}` });
+                    if (!this.IsShorted()) {
+                        this._ProxyLogger.Log({ level: 'I', msg: `[LIFT] Успешное восстановление после перезагрузки ИП.` });
+                        recovered = true;
+                        break;
+                    } 
+                }
+                if (!recovered) {
+                    this._ProxyLogger.Log({ level: 'I', msg: `[LIFT] Признаки КЗ после перезагрузки ИП.` });
+                    throw new Fault({ code: LIFT_STATE.SHORT_CIRCUIT });
+                }
+            } else {
+                this.StopForce();
+            }
             this.#_FSM.Dispatch(this.EVENTS.RECOVERED);
+
         } catch (innerFault) {
-            this._ProxyLogger.Log({ level: 'E', msg: `[LIFT] Критический сбой при попытке экстренной остановки` });
-            this.StopForce();
+            this._ProxyLogger.Log({ level: 'E', msg: `[LIFT] Критический сбой при попытке экстренной остановки. Выключение ИП.`, obj: innerFault });
+            this.UpdateStatus(innerFault);
         } finally {
-            this.UpdateStatus(fault);
             this.#_Context.currentTask?.rej?.(fault);
             this.#_Context.currentTask = null;
+            this.#_Context.fallbackTimer?.clear?.();
         }
+    }
+
+    OffPSU() {
+        this._ProxyLogger.Log({ level: 'I', msg: '[LIFT] Выключение ИП' });
+        this.#_ProxyCh.SetValue(this.#_Channels.psuWork, 0);
+    }
+
+    OnPSU() {
+        this._ProxyLogger.Log({ level: 'I', msg: '[LIFT] Включение ИП' });
+        this.#_ProxyCh.SetValue(this.#_Channels.psuWork, 1);
     }
 
     async Idle() {
-        this.#_Context.timer?.clear();
         try {
             await this.Stop();
         } catch (fault) {
@@ -632,8 +695,9 @@ class ClassSpiralSectionLift {
         } 
         this.#_Context.currentTask?.res?.();
         this.#_Context.currentTask = null;
+        this.#_Context.timer?.clear?.();
+        this.#_Context.fallbackTimer?.clear?.()
     }
-
 
     OnStateChanged({ eventName, state, prevState}) {
         this._ProxyLogger.Log({ level: 'D', msg: `[LIFT] STATE: ${prevState} --[${eventName}]--> ${state}` });
@@ -654,13 +718,22 @@ class ClassSpiralSectionLift {
         }
     }
 
+    InBottomPos() {
+        return this.#_ProxyCh.GetValue(this.#_Channels.liftBottomTamper) == LIFT_BOTTOM_TAMPER_ON;
+    }
+
     /**
      * @method
      * @returns {boolean}
      */
     IsShorted() {
-        return this.#_ProxyCh.GetValue(this.#_Channels.short) == STORAGE_CONSTANSTS.SHORT_CH_VAL
-            // || this.#_ProxyCh.GetValue(this.#_Channels.powerOff) == STORAGE_CONSTANSTS.POWER_OFF_CH_VAL;
+        const highI = this.#_ProxyCh.GetValue(this.#_Channels.current) > CURRENT_RANGE.SHORT[0];
+        const lowV = this.#_ProxyCh.GetValue(this.#_Channels.voltage) <= COMMON_CONSTANTS.MIN_VOLTAGE;
+        return  highI || lowV;
+    }
+
+    Abort() {
+        this.#_FSM.Dispatch(this.EVENTS.ABORT);
     }
 
     Reset() {
@@ -700,4 +773,4 @@ class ClassSpiralSectionLift {
 
 
 
-module.exports = { ClassSpiralSectionLift};
+module.exports = { ClassSpiralSectionLift };
