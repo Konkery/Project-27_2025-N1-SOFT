@@ -2,6 +2,7 @@ const dotenv = require('dotenv');
 const mqtt = require('mqtt');
 const { exec } = require('child_process');
 const EventEmitter = require('events');
+const BuzzerCtrl = require('./BuzzerRPi');
 const sleep = require('timers/promises').setTimeout;
 
 const POWEROFF_INTERNAL_CMD = 'echo "Powering OFF mid/hi hubs..."';
@@ -9,7 +10,6 @@ const POWERON_INTERNAL_CMD = 'echo "Powering ON mid/hi hubs..."';
 const LOCAL_POWEROFF_CMD = 'sudo systemctl poweroff';   //`echo "systemctl poweroff"`
 const LOCAL_REBOOT_CMD =  'sudo systemctl reboot'; //`echo "systemctl reboot"`
 
-// Load environment variables
 dotenv.config();
 
 // ==========================================
@@ -132,10 +132,12 @@ class MqttController extends EventEmitter {
 // ==========================================
 
 class ShutdownManager extends EventEmitter {
-    constructor(config = {}) {
+    constructor({ config, buzzer }) {
         super();
-        this.config = config;
+        this.config = config ?? {};
         this.isShutdownInProgress = false;
+        /** @type {BuzzerCtrl} */
+        this.buzzer = buzzer; 
     }
 
     /**
@@ -154,6 +156,8 @@ class ShutdownManager extends EventEmitter {
             console.log(`[ShutdownManager] Command execution is not allowed at this moment.`);
             return;
         }
+        if (this.buzzer)
+            this.buzzer.IndicateShutdownStart();
 
         this.isShutdownInProgress = true;
         console.log(`[ShutdownManager] Executing command: "${command}"`);
@@ -189,7 +193,6 @@ class ShutdownManager extends EventEmitter {
                 console.log('[ShutdownManager] Triggering pre-shutdown hook...');
                 await this.config.onPreShutdown();
             }
-
             if (command === 'reboot') {
                 // В случае reboot выдерживается короткая пауза, и питание подаётся повторно
                 console.log(`[ShutdownManager] Reboot mode active. Waiting pause (${this.config.rebootPauseMs}ms) before restoring power...`);
@@ -200,6 +203,8 @@ class ShutdownManager extends EventEmitter {
                 // await runCommand(POWERON_INTERNAL_CMD);
                 
                 // 7. hub-low перезагружается
+                if (this.buzzer)
+                    await this.buzzer.IndicateShutdownFinal();
                 console.log('[ShutdownManager] Initiating local reboot (hub-low)...');
                 await runCommand(LOCAL_REBOOT_CMD);
             } else {
@@ -207,6 +212,8 @@ class ShutdownManager extends EventEmitter {
                 await sleep(3000); 
                 // 7. hub-low выключается командой poweroff
                 console.log('[ShutdownManager] Initiating local shutdown (hub-low)...');
+                if (this.buzzer)
+                    await this.buzzer.IndicateShutdownFinal();
                 await runCommand(LOCAL_POWEROFF_CMD);
             }
 
