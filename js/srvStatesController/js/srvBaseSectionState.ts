@@ -1,62 +1,63 @@
 'use strict';
 // srvBaseSectionState.ts
 import EventEmitter2 from 'eventemitter2';
-import { 
-    IO_PORT_STATE, IO_STATE, CellStateKeys,
-    AVAILABLE, CELL_STATE, 
-    SECTION_STATUS, SectionStatusKeys,
-    LINE_STATE, LineStateKeys,
-    TRANSACT_STATE
-} from './srvStates';
-import { ISectionParams } from './srvSectionStateController';
+import {
+    BaseSectionState as IBaseSectionState,
+    TYPE_IO,
+    AVAILABLE_STATE,
+    SECTION_STATUS,
+    LINE_STATE,
+    CELL_STATE,
+    TRANSACT_STATE,
+    IO_STATE,
+    IO_PORT_STATE,
+    CELL_ACTION
+} from '../ts/IBaseSectionStates';
+import { SectionConfig } from '../ts/IMachineConfig';
 
-interface TYPE_IO {
-    name: string,
-    state: typeof IO_STATE[keyof typeof IO_STATE];
-    ports: typeof IO_PORT_STATE[keyof typeof IO_PORT_STATE][];
-} 
+export {
+    IBaseSectionState,
+    TYPE_IO,
+    AVAILABLE_STATE,
+    SECTION_STATUS,
+    LINE_STATE,
+    CELL_STATE,
+    TRANSACT_STATE,
+    IO_STATE,
+    IO_PORT_STATE
+};
 
-export class BaseSectionState < TCellState extends string = CellStateKeys> extends EventEmitter2 {
+export type ISectionParams = SectionConfig;
 
+export class BaseSectionState<TCellState extends string = CELL_STATE> extends EventEmitter2 implements Omit<IBaseSectionState, 'Cells'> {
     public Name: string;
-    public IsAvailable: typeof AVAILABLE[keyof typeof AVAILABLE];
-    public Status: SectionStatusKeys;
-    public Rows: LineStateKeys[];
-    public Cols: LineStateKeys[];
-    public Cells: TCellState[];
-    public CellsTransact: string[];
-    public Uptime: { 
-        hours: number, 
-        cycles: number, 
-        nominal: number, 
-    };
-    public Resourse_available: string[];
-    public Resourse_standard: number[];
+    public IsAvailable: AVAILABLE_STATE;
+    public Status: SECTION_STATUS;
+    public Rows: LINE_STATE[];
+    public Cols: LINE_STATE[];
+    public Cells: { Status: TCellState, Action: CELL_ACTION }[];
+    public CellsTransact: TRANSACT_STATE[];
+    public Resourse_available: AVAILABLE_STATE[];
     public IO: Record<string, TYPE_IO>;
 
     constructor(config: ISectionParams) {
         super();
         this.Name = config.Name;
-        this.IsAvailable = AVAILABLE.YES;
+        this.IsAvailable = AVAILABLE_STATE.YES;
         this.Status = SECTION_STATUS.IDLE;
-        const rows = config.Size?.rows ?? 3;
-        const cols = config.Size?.cols ?? 3;
+        const rows = (config as SectionConfig).Rows;
+        const cols = (config as SectionConfig).Cols;
         this.Rows = Array.from({ length: rows }, () => LINE_STATE.OK);
         this.Cols = Array.from({ length: cols }, () => LINE_STATE.OK);
-        this.Cells = Array.from({ length: rows * cols }, () => CELL_STATE.OK as TCellState);
-        this.CellsTransact = Array.from({ length: rows * cols }, () => TRANSACT_STATE.OK as string);
-        this.Resourse_available = Array.from({ length: rows * cols }, () => AVAILABLE.YES);
-        this.Resourse_standard = Array.from({ length: rows * cols }, () => 0);
-        this.Uptime = {
-            hours: 0,
-            cycles: 0,
-            nominal: 0,
-        };
+        this.Cells = Array.from({ length: rows * cols }, 
+            () => ({ Status: CELL_STATE.OK as unknown as TCellState, Action: CELL_ACTION.IDLE }));
+        this.CellsTransact = Array.from({ length: rows * cols }, () => TRANSACT_STATE.OK);
+        this.Resourse_available = Array.from({ length: rows * cols }, () => AVAILABLE_STATE.YES);
         this.IO = (config.IOList ?? []).reduce((pr, ioName) => {
-            pr[ioName] = { 
-                state: IO_STATE.OK, 
-                name: ioName, 
-                ports: [] 
+            pr[ioName] = {
+                state: IO_STATE.OK,
+                name: ioName,
+                ports: []
             };
             return pr;
         }, {} as Record<string, TYPE_IO>);
@@ -67,7 +68,7 @@ export class BaseSectionState < TCellState extends string = CellStateKeys> exten
         const rowsCount = this.Rows.length;
         const colsCount = this.Cols.length;
 
-        this.IsAvailable = AVAILABLE.YES;
+        this.IsAvailable = AVAILABLE_STATE.YES;
         this.Status = SECTION_STATUS.IDLE;
         this.Rows = Array.from({ length: rowsCount }, () => LINE_STATE.OK);
         this.Cols = Array.from({ length: colsCount }, () => LINE_STATE.OK);
@@ -79,9 +80,8 @@ export class BaseSectionState < TCellState extends string = CellStateKeys> exten
                 ports: []
             };
         }
-        this.Cells = Array.from({ length: cellCount }, () => CELL_STATE.OK as TCellState);
-        this.Resourse_available = Array.from({ length: cellCount }, () => AVAILABLE.YES);
-        this.Resourse_standard = Array.from({ length: cellCount }, () => 0);
+        this.Cells = Array.from({ length: cellCount }, () => ({ Status: CELL_STATE.OK as unknown as TCellState, Action: CELL_ACTION.IDLE }));
+        this.Resourse_available = Array.from({ length: cellCount }, () => AVAILABLE_STATE.YES);
     }
 }
 

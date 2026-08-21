@@ -13,7 +13,7 @@
       "description": "Дата и время введения аппарата в эксплуатацию"
     },
     "Command": {
-      "$ref": "js/srvStatesController/schema/base_section_states.schema.json#/definitions/COMMAND_STATE"
+      "$ref": "./base_section_states.schema.json#/definitions/COMMAND_STATE"
     },
     "Status": {
       "$ref": "#/definitions/MACHINE_STATUS"
@@ -52,8 +52,8 @@
       "description": "Список состояний секций вендингового аппарата",
       "items": {
         "anyOf": [
-          { "$ref": "./js/srvStatesController/schema/spiral_section_states.schema.json" },
-          { "$ref": "./js/srvStatesController/schema/base_section_states.schema.json" }
+          { "$ref": "./spiral_section_states.schema.json" },
+          { "$ref": "./base_section_states.schema.json" }
         ]
       }
     }

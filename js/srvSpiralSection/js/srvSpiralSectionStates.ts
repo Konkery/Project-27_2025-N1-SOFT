@@ -1,27 +1,20 @@
-import { BaseSectionState } from "../../srvStatesController/js/srvBaseSectionState";
-import { ISectionParams } from "../../srvStatesController/js/srvSectionStateController";
-import { CELL_STATE, LIFT_STATE, LiftStateKeys } from "../../srvStatesController/js/srvStates";
+import { BaseSectionState, ISectionParams } from "../../srvStatesController/js/srvBaseSectionState";
+import { CELL_STATE } from "../../srvStatesController/ts/IBaseSectionStates";
+import {
+    SPIRAL_CELL_STATE,
+    LIFT_STATE,
+    DELIVERY_BOX_STATE,
+} from "../../srvStatesController/ts/ISpiralSectionStates";
 
-export { LIFT_STATE, LiftStateKeys };
+export {
+    SPIRAL_CELL_STATE,
+    LIFT_STATE,
+    DELIVERY_BOX_STATE,
+};
 
-export const SPIRAL_CELL_STATE = {
-    ...CELL_STATE,
-    TAMPER_BAD_POS_ERROR: "TAMPER_BAD_POS_ERROR",
-} as const;
-
-export type SpiralCellStateKeys = typeof SPIRAL_CELL_STATE[keyof typeof SPIRAL_CELL_STATE];
-
-export const DELIVERY_BOX_STATE = {
-    OPENED: 'OPENED',
-    CLOSED: 'CLOSED',
-    ERR_MECHANICAL: 'ERR_MECHANICAL'
-} as const;
-
-export type DeliveryBoxStateKeys = typeof DELIVERY_BOX_STATE[keyof typeof DELIVERY_BOX_STATE];
-
-export class SpiralSectionState extends BaseSectionState<SpiralCellStateKeys> {
-    public Lift: LiftStateKeys;
-    public DeliveryBox: DeliveryBoxStateKeys;
+export class SpiralSectionState extends BaseSectionState<SPIRAL_CELL_STATE | CELL_STATE> {
+    public Lift: LIFT_STATE;
+    public DeliveryBox: DELIVERY_BOX_STATE;
 
     constructor(config: ISectionParams) {
         super(config);

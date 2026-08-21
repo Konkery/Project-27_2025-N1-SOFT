@@ -22,7 +22,7 @@
           "type": "array",
           "description": "Массив состояний ячеек спиральной секции",
           "items": {
-            "$ref": "#/definitions/SPIRAL_CELL_STATE"
+            "$ref": "#/definitions/TYPE_SPIRAL_CELL"
           }
         }
       },
@@ -30,6 +30,24 @@
     }
   ],
   "definitions": {
+    "TYPE_SPIRAL_CELL": {
+      "title": "TYPE_SPIRAL_CELL",
+      "description": "Объект состояния ячейки спиральной секции (Status, Action)",
+      "type": "object",
+      "properties": {
+        "Status": {
+          "anyOf": [
+            { "$ref": "#/definitions/SPIRAL_CELL_STATE" },
+            { "$ref": "./base_section_states.schema.json#/definitions/CELL_STATE" }
+          ]
+        },
+        "Action": {
+          "$ref": "./base_section_states.schema.json#/definitions/CELL_ACTION"
+        }
+      },
+      "required": ["Status", "Action"],
+      "additionalProperties": false
+    },
     "SPIRAL_CELL_STATE": {
       "title": "SPIRAL_CELL_STATE",
       "description": "Флаги состояния ячейки спиральной секции (OK - в норме, OPENING - открывается, OVERLOAD_I - повышенный ток, OVERLOAD_V - повышенное напряжение, BLOCKED - заблокирована, ERROR - ошибка, SERVICE - обслуживание, ERR_TAMPER - ошибка тампера, ERR_TAMPER_BAD_POS - некорректная позиция, ACTUATOR_SHORT_CIRCUIT - КЗ актуатора, ACTUATOR_NO_POWER - нет питания, ERR_MECHANICAL - механическая поломка, OVERLOAD - перегрузка, TAMPER_BAD_POS_ERROR - ошибка начального положения тампера, NOT_CLOSED - ячейка открыта слишком долго)",

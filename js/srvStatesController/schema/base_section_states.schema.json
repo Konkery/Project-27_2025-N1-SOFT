@@ -38,7 +38,7 @@
       "type": "array",
       "description": "Массив состояний ячеек секции",
       "items": {
-        "$ref": "#/definitions/CELL_STATE"
+        "$ref": "#/definitions/TYPE_CELL"
       }
     },
     "CellsTransact": {
@@ -113,11 +113,10 @@
     },
     "CELL_STATE": {
       "title": "CELL_STATE",
-      "description": "Флаги состояния ячейки (OK - штатно, OPENING - открывается, OVERLOAD_I - повышенный ток, OVERLOAD_V - повышенное напряжение, BLOCKED - заблокирована, ERROR - ошибка, SERVICE - обслуживание, ERR_TAMPER - ошибка тампера, ERR_TAMPER_BAD_POS - некорректная позиция, ACTUATOR_SHORT_CIRCUIT - КЗ актуатора, ACTUATOR_NO_POWER - нет питания, ERR_MECHANICAL - механическая поломка, OVERLOAD - перегрузка, NOT_CLOSED - ячейка открыта слишком долго)",
+      "description": "Флаги состояния ячейки (OK - штатно, OVERLOAD_I - повышенный ток, OVERLOAD_V - повышенное напряжение, BLOCKED - заблокирована, ERROR - ошибка, SERVICE - обслуживание, ERR_TAMPER - ошибка тампера, ERR_TAMPER_BAD_POS - некорректная позиция, ACTUATOR_SHORT_CIRCUIT - КЗ актуатора, ACTUATOR_NO_POWER - нет питания, ERR_MECHANICAL - механическая поломка, OVERLOAD - перегрузка, NOT_CLOSED - ячейка открыта слишком долго)",
       "type": "string",
       "enum": [
         "OK",
-        "OPENING",
         "OVERLOAD_I",
         "OVERLOAD_V",
         "BLOCKED",
@@ -127,13 +126,10 @@
         "ERR_TAMPER_BAD_POS",
         "ACTUATOR_SHORT_CIRCUIT",
         "ACTUATOR_NO_POWER",
-        "ERR_MECHANICAL",
-        "OVERLOAD",
-        "NOT_CLOSED"
+        "ERR_MECHANICAL"
       ],
       "tsEnumNames": [
         "OK",
-        "OPENING",
         "OVERLOAD_I",
         "OVERLOAD_V",
         "BLOCKED",
@@ -143,10 +139,30 @@
         "ERR_TAMPER_BAD_POS",
         "ACTUATOR_SHORT_CIRCUIT",
         "ACTUATOR_NO_POWER",
-        "ERR_MECHANICAL",
-        "OVERLOAD",
-        "NOT_CLOSED"
+        "ERR_MECHANICAL"
       ]
+    },
+    "CELL_ACTION": {
+      "title": "CELL_ACTION",
+      "description": "Флаги состояния действия ячейки (IDLE - закрыта/в ждущем режиме, ACTION - отрабатывает команду выдачи, OPEN - открыта, NOT_CLOSED - открыта слишком долго)", 
+      "type": "string",
+      "enum": ["IDLE", "ACTION", "OPEN", "NOT_CLOSED"],
+      "tsEnumNames": ["IDLE", "ACTION", "OPEN", "NOT_CLOSED"]
+    },
+    "TYPE_CELL": {
+      "title": "TYPE_CELL",
+      "description": "Объект состояния ячейки секции (Status, Action)",
+      "type": "object",
+      "properties": {
+        "Status": {
+          "$ref": "#/definitions/CELL_STATE"
+        },
+        "Action": {
+          "$ref": "#/definitions/CELL_ACTION"
+        }
+      },
+      "required": ["Status", "Action"],
+      "additionalProperties": false
     },
     "TRANSACT_STATE": {
       "title": "TRANSACT_STATE",
