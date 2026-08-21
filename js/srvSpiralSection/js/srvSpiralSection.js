@@ -3,16 +3,16 @@ const { ClassSpiralSectionLift }  = require('./srvSpiralSectionLift');
 const { ClassSpiralSectionStorage } = require('./srvSpiralSectionStorage');
 const { ClassFSM: FSM } = require('./srvFSM');
 const { ClassFault } = require('./srvUtils');
-const { FAULTS, STORAGE_CONSTANSTS, BOX_CONSTANTS } = require('./SpiralSectionConstants');
+const { FAULTS, STORAGE_CONSTANSTS, BOX_CONSTANTS, COMMON_CONSTANTS } = require('./SpiralSectionConstants');
 const { default: BaseSectionState } = require("../../srvStatesController/js/srvBaseSectionState");
 const ClassDeliveryBox = require("./srvDelieveryBox");
 const { AVAILABLE_STATE, SECTION_STATUS } = require("../../srvStatesController/ts/IBaseSectionStates");
 const { default: SpiralSectionState } = require("./srvSpiralSectionStates");
+const { SPIRAL_SAFE_MODE } = COMMON_CONSTANTS;
 
 let sleep = require('timers/promises').setTimeout;
 
 const DELAY_BEFORE_DISPENSE = 250;
-const SAFE_MODE = true;
 
 class ClassSpiralSection extends EventEmitter2 {
 
@@ -133,11 +133,13 @@ class ClassSpiralSection extends EventEmitter2 {
     }
 
     WatchBox() {
-        this.#_Box.on(ClassDeliveryBox.EVENTS.OPENED, this.Abort.bind(this));
+        this.#_Box.on(ClassDeliveryBox.EVENTS.OPENED, (() => {
+            this.Abort();
+        }).bind(this));
     }
 
     Abort() {
-        if (SAFE_MODE) {
+        if (SPIRAL_SAFE_MODE) {
             if (!this._Context.currentTask) return;
             this._ProxyLogger.Log({ level: 'I', msg: `Прерывание операции.` })
             this._Context.aborted = true;
@@ -174,7 +176,7 @@ class ClassSpiralSection extends EventEmitter2 {
     async _Execute(_orders) {
         try {
             this.#_SectionState.Status = SECTION_STATUS.DISPENSE;
-            if (SAFE_MODE && (!this.IsDoorClosed() || this.#_Box.IsOpened))
+            if (SPIRAL_SAFE_MODE && (!this.IsDoorClosed() || this.#_Box.IsOpened))
                 return this.HandleErr(undefined, 'Открыта дверь или люк. Отказ в начале транзакции');
             
             let orders = [..._orders];
