@@ -1,10 +1,12 @@
 const { ClassFSM: FSM } = require('./srvFSM');
 const { ClassFault } = require('./srvUtils');
 const { BOX_CONSTANTS, FAULTS } = require('./SpiralSectionConstants');
-const { default: BaseSectionState } = require("../../srvStatesController/js/srvBaseSectionState");
-const { default: SpiralSectionState, DELIVERY_BOX_STATE } = require('./srvSpiralSectionStates');
+const { default: BaseSectionState } = require("../../srvSpiralSection/js/srvSpiralSectionStates");
+const { default: SpiralSectionState } = require('./srvSpiralSectionStates');
+const { DELIVERY_BOX_STATE } = require('../../srvStatesController/ts/ISpiralSectionStates');
+const { EventEmitter2 } = require('eventemitter2');
 
-class ClassDeliveryBox {
+class ClassDeliveryBox extends EventEmitter2 {
 
     static STATE = {
         CLOSED: 'CLOSED',
@@ -28,6 +30,11 @@ class ClassDeliveryBox {
             [ClassDeliveryBox.EVENTS.DELIVER]: {
                 state: ClassDeliveryBox.STATE.UNLOCKING,
                 action: this._Unlock.bind(this)
+            },
+
+            [ClassDeliveryBox.EVENTS.OPENED]: {
+                state: ClassDeliveryBox.STATE.OPENED,
+                action: this.OnDoorOpened.bind(this)
             }
         },
 
@@ -66,9 +73,10 @@ class ClassDeliveryBox {
      * @param {BaseSectionState} param0.sectionState
      * @param {import('../../srvLogger/js/srvProxyLogger').ClassProxyLogger} param0.ProxyLogger
      */
-    constructor({ ProxyCh, channels, advOpts, sectionState }) {
+    constructor({ ProxyCh, ProxyLogger, channels, advOpts, sectionState }) {
+        super();
         this.#_ProxyCh = ProxyCh;
-        this._ProxyLogger = advOpts.ProxyLogger;
+        this._ProxyLogger = ProxyLogger;
         this.#_SectionState = sectionState;
         this.#_Channels = channels;
         this.unlockTimeout = BOX_CONSTANTS.UNLOCKED_TIMEOUT_SEC ?? 100;
@@ -162,9 +170,11 @@ class ClassDeliveryBox {
 
             switch (this.#_FSM.State) {
 
+                case ClassDeliveryBox.STATE.CLOSED:
                 case ClassDeliveryBox.STATE.UNLOCKING:
 
                     if (Value != BOX_CONSTANTS.BOX_CLOSED) {
+                        this.emit(ClassDeliveryBox.EVENTS.OPENED);
                         this.#_FSM.Dispatch(ClassDeliveryBox.EVENTS.OPENED);
                     }
                     break;
@@ -172,6 +182,7 @@ class ClassDeliveryBox {
                 case ClassDeliveryBox.STATE.OPENED:
 
                     if (Value == BOX_CONSTANTS.BOX_CLOSED) {
+                        this.emit(ClassDeliveryBox.EVENTS.CLOSED);
                         this.#_FSM.Dispatch(ClassDeliveryBox.EVENTS.CLOSED);
                     }
 
