@@ -10,7 +10,6 @@ class ClassVendingSectionFacade {
 
     _Context = { 
         order: null,
-        currentTask: null
     };
 
     /**@type {EventEmitter2} */
@@ -21,6 +20,8 @@ class ClassVendingSectionFacade {
     #_SectionState = null;
     /** @type {ClassSpiralSection} */
     #_Section = null;
+    /** @type {ClassLoggerDecorator} */
+    #_Logger = null;
 
     /**
      * 
@@ -29,13 +30,13 @@ class ClassVendingSectionFacade {
      * @param {import("./srvSpiralSection").TypeSpiralSectionOpts} param0.advOpts
      * @param {import('../../srvProxySection/js/Messages').TypeTarget} param0.target  
      */
-    constructor({ section, target, sectionState }) {
+    constructor({ section, target, sectionState, ProxyLogger }) {
         this._Target = target;
         this.#_Section = section; //new ClassSpiralSection({ ProxyCh, channels, advOpts, SectionState });
+        this.#_Logger = ProxyLogger;
         this.#_SectionState = sectionState;
-        this.#_Section.on('fail', this.HandleFail.bind(this));
-        this.#_Section.on('result', this.OnResult.bind(this));
-        this.#_Section.on('error', this.HandleErr.bind(this));
+
+        this.#_Section.on('result', this.OnSectionResult.bind(this));
     }
 
     get Target() { return this._Target; }
@@ -45,8 +46,10 @@ class ClassVendingSectionFacade {
         return this.#_Events;
     }
 
+    get Section() { return this.#_Section; }
+
     /**
-     * @param {TypeTransaction} transaction 
+     * @param {import('../../srvProxySection/js/Messages').Order} transaction 
      * @param {object} param0 
      */
     async PerformTransaction(transaction, param0) {
@@ -54,7 +57,7 @@ class ClassVendingSectionFacade {
         const { ID, Cells } = transaction;
         if (this._Context.order) 
             return this.HandleErr(new Error('Выполняется предыдущая операция'));
-        
+        this.#_Logger.TransactionID = ID;
         this._Context.order = { ID, Cells };
         return (mock ? this._ExecuteMock(Cells) : this.#_Section.Execute(Cells)).finally(() => {
             this._Context.order = null;
@@ -65,13 +68,13 @@ class ClassVendingSectionFacade {
         return this.#_Section.Invoke(...args);
     }
 
-    /**
-     * 
-     * @param {import('../../srvProxySection/js/Messages').Cell} cell 
-     * @param {boolean} error 
-     * @returns 
+     /**
+     * Унифицированный обработчик результатов от секции
+     * @param {object} param0
+     * @param {object|null} param0.cell
+     * @param {Error|ClassFault|null} param0.error
      */
-    OnResult(cell, errorMessage='') {
+    OnSectionResult({ ok, cell }) {
         const { ID } = this._Context?.order ?? {};
         if (ID) {
             this.SendResponse({
@@ -81,8 +84,8 @@ class ClassVendingSectionFacade {
                     Timestamp: new Date().getTime(),
                     Target: this._Target,
                     Cell: cell,
-                    Result: errorMessage ? 'FAIL' : 'OK',           
-                    Message: errorMessage ? errorMessage : 'Операция выполнена успешно'
+                    Result:  ok ? 'OK' : 'FAIL',           
+                    Message: ok ? 'Операция выполнена успешно' : 'Ошибка при выдаче ТМЦ'
                 }  
             });
         };
@@ -93,35 +96,9 @@ class ClassVendingSectionFacade {
     }
 
     Reset() {
-        this._Context.currentTask?.rej?.(new Error('Reset'));
-        this._Context.currentTask = null;
         this._Context.order = null;
         this.#_Section.Reset();
     }
-
-    HandleErr(e, prefixMsg) {
-        let errMsg = (e instanceof Error) ?
-            `${prefixMsg}: ${e.message}.`
-            : (e instanceof ClassFault) ?
-            `${prefixMsg}: ${FAULT_DESC_RU[e.code]}.`
-            :`${prefixMsg}: ошибка не определена.`;
-        console.log(`[SPIRAL] Error ${errMsg}`);
-        this.OnResult(null, errMsg);
-    }
-
-    HandleFail(cell, fault) {
-        const prefixMsg = 'Ошибка при выдаче ТМЦ';
-        let errMsg = (fault instanceof ClassFault) ?
-            `${prefixMsg}: ${FAULT_DESC_RU[fault.code]}.`
-          : `${prefixMsg}: ошибка не определена.`;
-        console.log(`[SPIRAL] Fail ${errMsg}`);
-        this.OnResult(cell, errMsg);
-    }
-
-    HandleDispense(cell) {
-        return this.OnResult(cell);
-    }
-
 
     /**
      * @description
@@ -148,5 +125,26 @@ class ClassVendingSectionFacade {
     }
 }
 
+class ClassLoggerDecorator {
+    #_TransactionID
+    constructor(logger) {
+        this._logger = logger;
+    }
+    set TransactionID(value) {
+        this.#_TransactionID = value;
+    }
+    /**
+     * @param {object} opts
+     * @param {string} opts.level
+     * @param {string} opts.msg
+     * @param {object} opts.obj 
+     */
+    Log(opts) {
+        return this._logger.Log({ 
+            ...opts, 
+            obj: this.#_TransactionID ? { ...opts.obj, transactionID: this.#_TransactionID } : opts.obj
+        });
+    }
+}
 
 exports.default = ClassVendingSectionFacade;
