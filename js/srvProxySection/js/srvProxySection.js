@@ -1,6 +1,6 @@
 const { randomUUID } = require('node:crypto');
 const { default: StatesController } = require('../../srvStatesController/js/srvSectionStateController');
-const { GLOBAL_MACHINE_STATE, /*BUS_MEAS_STATE,*/ AVAILABLE, SECTION_STATUS } = require('../../srvStatesController/js/srvStates');
+const { GLOBAL_MACHINE_STATE, /*BUS_MEAS_STATE,*/ AVAILABLE_STATE, SECTION_STATUS } = require('../../srvStatesController/ts/IGlobalStates');
 
 const EventEmitter = require('eventemitter2').EventEmitter2;
 
@@ -10,6 +10,7 @@ const COMMANDS = {
     SetItem: 'SetItem', // – загрузка ТМЦ в указанные ячейки;
     SetAll: 'SetAll', // – загрузка ТМЦ во все ячейки по загруженной конфигурации;
     GetStatus: 'GetStatus',// – получение статуса аппарата;
+    GetWeight: 'GetWeight', 
     Reboot: 'Reboot', //– перезагрузка аппарата;
     SetConfig: 'SetConfig', ///– загрузка конфигурационного файла;
     Maintenance: 'Maintenance', //– перевод аппарата в режим обслуживания
@@ -48,14 +49,8 @@ class ClassProxySection {
         
         // for (const _order of Orders) {
         return Orders.map(_order => {
-            // const section = this.GetSectionByTarget(_order.Target);
-            const sectionState = this._StateController.Machine.States.Sections[_order.Target.name];
-            if (!sectionState) return;
-            // const sectionState = this._StateController.Machine.States.Sections[section.name];
-            if (sectionState.Status != SECTION_STATUS.IDLE) return;
-            if (sectionState.IsAvailable != AVAILABLE.YES) return;
             const order = this.ProcessOrder(ID, _order);
-            return { section: sectionState.Name ?? _order.Target.name, order };
+            return { section: _order.Target.id, order };
             // this.RouteCommand(order);
         }).filter(Boolean);
     }
@@ -86,10 +81,18 @@ class ClassProxySection {
     ProcessOrder(id, order) {
         // TODO: фильтр сообщений для Target
         // let ID = v4();
-        if (order?.Command?.toLowerCase() == COMMANDS.GetItem.toLowerCase()) {
-            // if (!this.IsGetItemOrderValid(order)) return;
-            return { ID: id, ...order };
-        }
+        // if (order?.Command?.toLowerCase() == COMMANDS.GetItem.toLowerCase()) {
+            // const section = this.GetSectionByTarget(_order.Target);
+        const tid = order.Target.id;
+        const tid2 = id == process.env.SPIRAL_SECTION_ID ? 0 : 1;
+        const sectionState = this._StateController.Machine.States.Sections[tid2];
+        if (!sectionState) return;
+        
+        if (sectionState.Status != SECTION_STATUS.IDLE) return;
+        if (sectionState.IsAvailable != AVAILABLE_STATE.YES) return;
+
+        return { ID: id, ...order };
+        // }
     }
     
     /**
