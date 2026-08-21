@@ -73,12 +73,12 @@ export class MqttPortService extends EventEmitter2 implements IPortService {
         });
     }
 
-    Pub(topic: string, state: string): void {
+    Pub(topic: string, state: string, opts?: { retain: boolean }): void {
         if (this.client && this.client.connected) {
             this.publishedTopics.add(topic);
             const pubOptions: any = { 
                 qos: 1, 
-                retain: true // Сохранять последнее сообщение на брокере,
+                retain: opts?.retain ?? true // Сохранять последнее сообщение на брокере,
             };
             if (this.useMqttV5) {
                 pubOptions.properties = {
