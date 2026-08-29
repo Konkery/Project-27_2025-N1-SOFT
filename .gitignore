@@ -4,3 +4,5 @@
 # Optional useful ignores
 .vscode/
 "System Volume Information"
+node_modules
+00__raw
