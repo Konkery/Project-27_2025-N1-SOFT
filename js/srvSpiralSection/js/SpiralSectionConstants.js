@@ -1,69 +1,82 @@
-function parseRange(json) {
-    const obj = JSON.parse(json)
-
-    // null → Infinity
-    for (const key in obj) {
-        if (obj[key][1] === null) {
-            obj[key][1] = Infinity
-        }
-    }
-
-    return obj
-}
-
-function parseValue(_var) {
-    let val = Number(_var);
-    if (isNaN(val)) 
-        throw new Error('Invalid arg')
-    return val
-}
-
 const STORAGE_CONSTANSTS = {
-    SHORT_CH_VAL: parseValue(process.env.STORAGE_SHORT_CH_VAL),
+    SHORT_CH_VAL: 1,
+    POWER_OFF_CH_VAL: 1,
 
-    TAMPER_ON: parseValue(process.env.STORAGE_TAMPER_ON),
-    TAMPER_OFF: parseValue(process.env.STORAGE_TAMPER_OFF),
-    TAMPER_UNDEFINED: parseValue(process.env.STORAGE_TAMPER_UNDEFINED),
+    TAMPER_ON: 0,
+    TAMPER_OFF: 1,
+    TAMPER_UNDEFINED: 0,
 
-    AVG_ROTATION_TIME: parseValue(process.env.STORAGE_AVG_ROTATION_TIME),
-    FULL_ROTATION_TIMEOUT: parseValue(process.env.STORAGE_FULL_ROTATION_TIMEOUT),
+    AVG_ROTATION_TIME: 3000,
+    FULL_ROTATION_TIMEOUT: 3500,
+    TAMPER_DEBOUNCE: 500,
 
-    CURRENT_RANGE: parseRange(
-        process.env.STORAGE_CURRENT_RANGE
-    ),
-    
-    ELECTR_CURR_STATE: {
-        IDLE: 'IDLE',
-        WORK_OK: 'WORK_OK',
-        OVERLOAD: 'STUCK'
-    }
-}
-const LIFT_CONSTANTS = {
-    LIFT_LEVEL_ON: parseValue(process.env.LIFT_LEVEL_ON),
-    LIFT_LEVEL_OFF: parseValue(process.env.LIFT_LEVEL_OFF),
+    MONITOR_INTERVAL: 200,
 
-    LIFT_BOTTOM_TAMPER_ON: parseValue(process.env.LIFT_BOTTOM_TAMPER_ON),
-    LIFT_BOTTOM_TAMPER_OFF: parseValue(process.env.LIFT_BOTTOM_TAMPER_OFF),
-    LIFT_BOTTOM_TAMPER_DEBOUNCE: parseValue(process.env.LIFT_BOTTOM_TAMPER_DEBOUNCE),
+    CURRENT_RANGE: {
+        IDLE: [0, 0.3],
+        WORK_OK: [0.3, 0.21],
+        OVERLOAD: [0.21, 1],
+        SHORT: [1, Infinity]
+    },
 
-    DOUBLE_TRIGGER_WINDOW: parseValue(process.env.LIFT_DOUBLE_TRIGGER_WINDOW),
-
-    ELEVATE_NEXT_AVG_TIME: parseValue(process.env.LIFT_ELEVATE_NEXT_AVG_TIME),
-    ELEVATE_NEXT_OVERLOAD_TIME: parseValue(process.env.LIFT_ELEVATE_NEXT_OVERLOAD_TIME),
-    ELEVATE_NEXT_MAX_TIME: parseValue(process.env.LIFT_ELEVATE_NEXT_MAX_TIME),
-
-    MOTOR_RES_MAX_TIME: parseValue(process.env.LIFT_MOTOR_RES_MAX_TIME),
-
-    CURRENT_RANGE: parseRange(
-        process.env.LIFT_CURRENT_RANGE
-    ),
+    VOLTAGE_RANGE: {
+        IDLE: [0, 0.3],
+        WORK_OK: [0.3, 0.21],
+        OVERLOAD: [0.21, 1],
+        SHORT: [1, Infinity]
+    },
 
     ELECTR_CURR_STATE: {
         IDLE: 'IDLE',
         WORK_OK: 'WORK_OK',
         OVERLOAD: 'STUCK',
         SHORT: 'SHORT'
-    }
+    },
+
+    SUPPLY_VOLTAGE: 24,
+    SUPPLY_VOLTAGE_UPPER_LIM: 25,
+    SUPPLY_VOLTAGE_LOWER_LIM: 23
+}
+const LIFT_CONSTANTS = {
+    LIFT_LEVEL_ON: 1,
+    LIFT_LEVEL_OFF: 0,
+
+    LIFT_BOTTOM_TAMPER_ON: 1,
+    LIFT_BOTTOM_TAMPER_OFF: 0,
+    LIFT_BOTTOM_TAMPER_DEBOUNCE: 500,
+
+    DOUBLE_TRIGGER_WINDOW: 100,
+
+    ELEVATE_NEXT_AVG_TIME: 800,
+    ELEVATE_NEXT_OVERLOAD_TIME: 1000,
+    ELEVATE_NEXT_MAX_TIME: 1200,
+
+    MOTOR_RES_MAX_TIME: 500,
+    MONITOR_INTERVAL: 200,
+
+    CURRENT_RANGE: {
+        IDLE: [0, 0.1],
+        WORK_OK: [0.1, 0.29],
+        OVERLOAD: [0.29, 4.5],
+        SHORT: [4.5, Infinity]
+    },
+
+    ELECTR_CURR_STATE: {
+        IDLE: 'IDLE',
+        WORK_OK: 'WORK_OK',
+        OVERLOAD: 'STUCK',
+        SHORT: 'SHORT'
+    },
+
+    WORK_VOLTAGE: 24
+}
+
+const BOX_CONSTANTS = {
+    UNLOCKED_TIMEOUT_SEC: 20,
+    DOOR_CLOSED: 1,
+    BOX_CLOSED: 1,
+    UNLOCK_ON: 1,
+    UNLOCK_OFF: 0,
 }
 
 const FAULTS = {
@@ -81,7 +94,8 @@ const FAULTS = {
 
     ACTUATOR_NO_POWER: 7,
     ACTUATOR_SHORT_CIRCUIT: 8,
-    TAMPER_ERROR: 9,
+    ERR_TAMPER: 9,
+    TAMPER_BAD_POS: 19,
     ACTUATOR_OVERLOAD: 10,
     ACTUATOR_OVERLOAD_1: 11,
     ACTUATOR_OVERLOAD_2: 12,
@@ -91,6 +105,9 @@ const FAULTS = {
     IO_PORT_ERR: 15,
     IO_PORT_ERR_1: 16,
     IO_PORT_ERR_2: 17,
+
+    FALLBACK_TIMEOUT: 18,
+    DOOR_OPENED: 20
 };
 
 const CELL_CONSTANTS = {
@@ -118,24 +135,43 @@ const CELL_CONSTANTS = {
 }
 
 const FAULT_DESC_RU = {
-    0: "Нет ошибки",
+    [FAULTS.NONE]: "Нет ошибки",
+    [FAULTS.LIFT_SHORT_CIRCUIT]: "Короткое замыкание двигателя лифта",
+    [FAULTS.LIFT_NO_POWER]: "Отсутствует питание двигателя лифта",
+    [FAULTS.LIFT_OVERLOAD]: "Перегрузка двигателя лифта",
+    [FAULTS.LIFT_CTRL_UNDEFINED]: "Неопределённое состояние управления лифтом",
 
-    1: "Короткое замыкание двигателя лифта",
-    2: "Отсутствует питание двигателя лифта",
-    3: "Перегрузка двигателя лифта",
-    4: "Неопределённое состояние управления лифтом",
+    [FAULTS.LEVEL_SENSOR_FAIL]: "Отказ датчика уровня",
+    [FAULTS.BOTTOM_TAMPER_FAIL]: "Отказ нижнего тампера",
+    [FAULTS.TAMPER_BAD_POS]: "Одна из спиралей находится в некорректном начальном положении",
+    [FAULTS.ACTUATOR_NO_POWER]: "Отсутствует питание актуатора",
+    [FAULTS.ACTUATOR_SHORT_CIRCUIT]: "Короткое замыкание актуатора",
+    [FAULTS.ERR_TAMPER]: "Ошибка сигнала тампера",
+    [FAULTS.ACTUATOR_OVERLOAD]: "Перегрузка актуатора",
 
-    5: "Отказ датчика уровня",
-    6: "Отказ нижнего тампера",
+    [FAULTS.IO_DRIVER_ERR]: "Ошибка драйвера ввода-вывода",
+    [FAULTS.IO_TIMEOUT]: "Таймаут обмена с устройством ввода-вывода",
+    [FAULTS.IO_PORT_ERR]: "Ошибка порта ввода-вывода",
 
-    7: "Отсутствует питание актуатора",
-    8: "Короткое замыкание актуатора",
-    9: "Ошибка сигнала тампера",
-    10: "Перегрузка актуатора",
-
-    13: "Ошибка драйвера ввода-вывода",
-    14: "Таймаут обмена с устройством ввода-вывода",
-    15: "Ошибка порта ввода-вывода"
+    [FAULTS.FALLBACK_TIMEOUT]: "Выполнение команды прервано из за превышения ожидаемого таймаута",
+    [FAULTS.DOOR_OPENED]: "Дверь открыта, выполнение транзакции заблокировано"
 }
 
-module.exports = { STORAGE_CONSTANSTS, LIFT_CONSTANTS, CELL_CONSTANTS, FAULTS, FAULT_DESC_RU };
+const U_TRANSACTIONS = {
+    ACTUATOR_CONNECT_GND: 'Подключение актуатора к Gnd',
+    ACTUATOR_CONNECT_V_PLUS: 'Подключение актуатора к V+',
+    ACTUATOR_DISCONNECT_GND: 'Отключение актуатора от Gnd',
+    ACTUATOR_DISCONNECT_V_PLUS: 'Отключение актуатора от V+',
+
+    LIFT_CONNECT_GND_REV: 'Подключение лифта к Gnd/Reverse',
+    LIFT_DISCONNECT_GND_REV: 'Отключение лифта от Gnd/Reverse',
+    LIFT_CONNECT_V_PLUS_REV: 'Подключение лифта к V+/Reverse',
+    LIFT_DISCONNECT_V_PLUS_REV: 'Отключение лифта от V+/Reverse',
+
+    LIFT_CONNECT_GND_FWD: 'Подключение лифта к Gnd/Forward',
+    LIFT_DISCONNECT_GND_FWD: 'Отключение лифта от Gnd/Forward',
+    LIFT_CONNECT_V_PLUS_FWD: 'Подключение лифта к V+/Forward',
+    LIFT_DISCONNECT_V_PLUS_FWD: 'Отключение лифта от V+/Forward'
+};
+
+module.exports = { STORAGE_CONSTANSTS, LIFT_CONSTANTS, BOX_CONSTANTS, CELL_CONSTANTS, FAULTS, FAULT_DESC_RU, U_TRANSACTIONS };

@@ -1,0 +1,535 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GlobalStates",
+  "description": "JSON Schema для глобального дерева состояний вендингового аппарата (States)",
+  "type": "object",
+  "properties": {
+    "Name": {
+      "type": "string",
+      "description": "Уникальное имя вендингового аппарата"
+    },
+    "StartDate": {
+      "type": "string",
+      "description": "Дата и время введения аппарата в эксплуатацию"
+    },
+    "Command": {
+      "$ref": "./base_section_states.schema.json#/definitions/COMMAND_STATE"
+    },
+    "Status": {
+      "$ref": "#/definitions/MACHINE_STATUS"
+    },
+    "Mode": {
+      "$ref": "#/definitions/GLOBAL_MACHINE_STATE"
+    },
+    "Resource": {
+      "$ref": "#/definitions/RESOURCE_STATE"
+    },
+    "Mains": {
+      "$ref": "#/definitions/MainsState"
+    },
+    "Env": {
+      "$ref": "#/definitions/EnvState"
+    },
+    "Bus": {
+      "type": "array",
+      "description": "Список флагов состояния шин электропитания",
+      "items": {
+        "$ref": "#/definitions/BusState"
+      }
+    },
+    "Net": {
+      "$ref": "#/definitions/NetState"
+    },
+    "PSU": {
+      "type": "array",
+      "description": "Список флагов состояния источников питания (ИП)",
+      "items": {
+        "$ref": "#/definitions/PsuState"
+      }
+    },
+    "Sections": {
+      "type": "array",
+      "description": "Список состояний секций вендингового аппарата",
+      "items": {
+        "anyOf": [
+          { "$ref": "./spiral_section_states.schema.json" },
+          { "$ref": "./base_section_states.schema.json" }
+        ]
+      }
+    }
+  },
+  "required": [
+    "Name",
+    "StartDate",
+    "Status",
+    "Mode",
+    "Mains",
+    "Env",
+    "Net",
+    "PSU",
+    "Sections"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "MACHINE_STATUS": {
+      "title": "MACHINE_STATUS",
+      "description": "Глобальный статус работоспособности аппарата (OK - штатный режим, WARNING - режим частичной работоспособности, ERROR - нештатный режим)",
+      "type": "string",
+      "enum": ["OK", "WARNING", "ERROR"],
+      "tsEnumNames": ["OK", "WARNING", "ERROR"]
+    },
+    "GLOBAL_MACHINE_STATE": {
+      "title": "GLOBAL_MACHINE_STATE",
+      "description": "Глобальные режимы работы аппарата (OK - штатный режим, SERVICE - техническое обслуживание, DEPLOY - обновление прошивки, RESTART - режим перезапуска, STOP - режим останова)",
+      "type": "string",
+      "enum": ["OK", "SERVICE", "DEPLOY", "RESTART", "STOP"],
+      "tsEnumNames": ["OK", "SERVICE", "DEPLOY", "RESTART", "STOP"]
+    },
+    "RESOURCE_STATE": {
+      "title": "RESOURCE_STATE",
+      "description": "Общее состояние моторесурса аппарата (OK - в допуске, WARNING - требуется обслуживание, ERROR - моторесурс исчерпан)",
+      "type": "string",
+      "enum": ["OK", "WARNING", "ERROR"],
+      "tsEnumNames": ["OK", "WARNING", "ERROR"]
+    },
+    "MEAS_STATE": {
+      "title": "MEAS_STATE",
+      "description": "Статус измерений (OK - значение в норме, ERR_HIGH - значение повышено, ERR_LOW - значение понижено)",
+      "type": "string",
+      "enum": ["OK", "ERR_HIGH", "ERR_LOW"],
+      "tsEnumNames": ["OK", "ERR_HIGH", "ERR_LOW"]
+    },
+    "BUS_CURRENT_STATE": {
+      "title": "BUS_CURRENT_STATE",
+      "description": "Статус тока шины или источника питания (OK - в норме, ERR_HIGH - повышенный ток)",
+      "type": "string",
+      "enum": ["OK", "ERR_HIGH"],
+      "tsEnumNames": ["OK", "ERR_HIGH"]
+    },
+    "AVAILABLE_STATE": {
+      "title": "AVAILABLE_STATE",
+      "description": "Флаг доступности (YES - доступно/в норме, NO - недоступно/исчерпано)",
+      "type": "string",
+      "enum": ["YES", "NO"],
+      "tsEnumNames": ["YES", "NO"]
+    },
+    "MainsState": {
+      "title": "MainsState",
+      "description": "Флаги состояния электропитания сети",
+      "type": "object",
+      "properties": {
+        "Voltage": {
+          "$ref": "#/definitions/MEAS_STATE"
+        }
+      },
+      "required": ["Voltage"],
+      "additionalProperties": false
+    },
+    "EnvState": {
+      "title": "EnvState",
+      "description": "Флаги состояния датчиков окружающей среды",
+      "type": "object",
+      "properties": {
+        "Temp": {
+          "$ref": "#/definitions/MEAS_STATE"
+        },
+        "Hum": {
+          "$ref": "#/definitions/MEAS_STATE"
+        }
+      },
+      "required": ["Temp", "Hum"],
+      "additionalProperties": false
+    },
+    "BusState": {
+      "title": "BusState",
+      "description": "Флаги состояния шины электропитания",
+      "type": "object",
+      "properties": {
+        "Voltage": {
+          "$ref": "#/definitions/MEAS_STATE"
+        },
+        "Current": {
+          "$ref": "#/definitions/BUS_CURRENT_STATE"
+        }
+      },
+      "required": ["Voltage", "Current"],
+      "additionalProperties": false
+    },
+    "PsuState": {
+      "title": "PsuState",
+      "description": "Флаги состояния источника питания (ИП)",
+      "type": "object",
+      "properties": {
+        "VoltageIn": {
+          "$ref": "#/definitions/MEAS_STATE"
+        },
+        "VoltageOut": {
+          "$ref": "#/definitions/MEAS_STATE"
+        },
+        "CurrentOut": {
+          "$ref": "#/definitions/BUS_CURRENT_STATE"
+        },
+        "Temp": {
+          "$ref": "#/definitions/MEAS_STATE"
+        },
+        "ShortCircuit": {
+          "$ref": "#/definitions/AVAILABLE_STATE"
+        },
+        "Enabled": {
+          "$ref": "#/definitions/AVAILABLE_STATE"
+        },
+        "Resource": {
+          "$ref": "#/definitions/AVAILABLE_STATE"
+        }
+      },
+      "required": ["VoltageIn", "VoltageOut", "CurrentOut", "Temp", "ShortCircuit", "Enabled", "Resource"],
+      "additionalProperties": false
+    },
+    "NET_SUMMARY_STATE": {
+      "title": "NET_SUMMARY_STATE",
+      "description": "Агрегированный статус сетевых сервисов и узлов (READY - готов, OK - в норме, DEGRADED - частичная деградация, FAIL - сбой, OFFLINE - отключено, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["READY", "OK", "DEGRADED", "FAIL", "OFFLINE", "UNKNOWN"],
+      "tsEnumNames": ["READY", "OK", "DEGRADED", "FAIL", "OFFLINE", "UNKNOWN"]
+    },
+    "NET_DEVICE_STATE": {
+      "title": "NET_DEVICE_STATE",
+      "description": "Статус сетевого устройства (ONLINE - доступен, OFFLINE - недоступен, ERR_API - ошибка API, ERR_CONFIG - ошибка конфигурации, ERR_MANAGEMENT - нет доступа к управлению, ERR_NO_LINK - потерян линк, ERR_NO_IP - нет IP, ERR_SERVICE_ACCESS - нет доступа к сервисам, ERR_NO_POE - нет PoE питания, ERR_AUTH - ошибка авторизации, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["ONLINE", "OFFLINE", "ERR_API", "ERR_CONFIG", "ERR_MANAGEMENT", "ERR_NO_LINK", "ERR_NO_IP", "ERR_SERVICE_ACCESS", "ERR_NO_POE", "ERR_AUTH", "UNKNOWN"],
+      "tsEnumNames": ["ONLINE", "OFFLINE", "ERR_API", "ERR_CONFIG", "ERR_MANAGEMENT", "ERR_NO_LINK", "ERR_NO_IP", "ERR_SERVICE_ACCESS", "ERR_NO_POE", "ERR_AUTH", "UNKNOWN"]
+    },
+    "NET_LINK_STATE": {
+      "title": "NET_LINK_STATE",
+      "description": "Статус физического сетевого линка (UP - поднят, DOWN - отсутствует, ERR_SPEED - несоответствие скорости, ERR_ERRORS - ошибки на порту/CRC, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["UP", "DOWN", "ERR_SPEED", "ERR_ERRORS", "UNKNOWN"],
+      "tsEnumNames": ["UP", "DOWN", "ERR_SPEED", "ERR_ERRORS", "UNKNOWN"]
+    },
+    "NET_IP_STATE": {
+      "title": "NET_IP_STATE",
+      "description": "Статус IP-адресации (OK - в норме, ERR_NO_IP - нет IP, ERR_WRONG_IP - неверный IP, ERR_DUPLICATE_IP - дубликат IP, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "ERR_NO_IP", "ERR_WRONG_IP", "ERR_DUPLICATE_IP", "UNKNOWN"],
+      "tsEnumNames": ["OK", "ERR_NO_IP", "ERR_WRONG_IP", "ERR_DUPLICATE_IP", "UNKNOWN"]
+    },
+    "NET_ARP_STATE": {
+      "title": "NET_ARP_STATE",
+      "description": "Статус ARP-таблицы (OK - в норме, ERR_MAC_CHANGED - изменился MAC, ERR_MAC_DUPLICATE - дубликат MAC, ERR_MISSING_ARP - нет записи ARP, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "ERR_MAC_CHANGED", "ERR_MAC_DUPLICATE", "ERR_MISSING_ARP", "UNKNOWN"],
+      "tsEnumNames": ["OK", "ERR_MAC_CHANGED", "ERR_MAC_DUPLICATE", "ERR_MISSING_ARP", "UNKNOWN"]
+    },
+    "NET_GATEWAY_STATE": {
+      "title": "NET_GATEWAY_STATE",
+      "description": "Статус сетевого шлюза (OK - доступен, ERR_NO_GATEWAY - шлюз не задан, ERR_GATEWAY_UNREACHABLE - шлюз недоступен, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "ERR_NO_GATEWAY", "ERR_GATEWAY_UNREACHABLE", "UNKNOWN"],
+      "tsEnumNames": ["OK", "ERR_NO_GATEWAY", "ERR_GATEWAY_UNREACHABLE", "UNKNOWN"]
+    },
+    "NET_ROUTE_STATE": {
+      "title": "NET_ROUTE_STATE",
+      "description": "Статус маршрута (OK - исправен, OFFLINE - отключен, DEGRADED - сбои, FAIL - недоступен, NOT_REQUIRED - не требуется, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "OFFLINE", "DEGRADED", "FAIL", "NOT_REQUIRED", "UNKNOWN"],
+      "tsEnumNames": ["OK", "OFFLINE", "DEGRADED", "FAIL", "NOT_REQUIRED", "UNKNOWN"]
+    },
+    "NET_QUALITY_STATE": {
+      "title": "NET_QUALITY_STATE",
+      "description": "Статус качества связи (OK - в норме, WARN_LATENCY - задержка, WARN_JITTER - джиттер, WARN_PACKET_LOSS - потери пакетов, FAIL_STORM - сетевой шторм, FAIL_MAC_FLAP - флэппинг MAC, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "WARN_LATENCY", "WARN_JITTER", "WARN_PACKET_LOSS", "FAIL_STORM", "FAIL_MAC_FLAP", "UNKNOWN"],
+      "tsEnumNames": ["OK", "WARN_LATENCY", "WARN_JITTER", "WARN_PACKET_LOSS", "FAIL_STORM", "FAIL_MAC_FLAP", "UNKNOWN"]
+    },
+    "NET_POE_STATE": {
+      "title": "NET_POE_STATE",
+      "description": "Статус PoE питания (OK - в норме, OFF - отключен, WARN_BUDGET - порог бюджета, ERR_BUDGET - превышение бюджета, ERR_MANAGEMENT - ошибка управления, ERR_POWER_LOW - пониженное потребление, ERR_POWER_HIGH - повышенное потребление, ERR_PORT - ошибка порта, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "OFF", "WARN_BUDGET", "ERR_BUDGET", "ERR_MANAGEMENT", "ERR_POWER_LOW", "ERR_POWER_HIGH", "ERR_PORT", "UNKNOWN"],
+      "tsEnumNames": ["OK", "OFF", "WARN_BUDGET", "ERR_BUDGET", "ERR_MANAGEMENT", "ERR_POWER_LOW", "ERR_POWER_HIGH", "ERR_PORT", "UNKNOWN"]
+    },
+    "NET_CAMERA_SERVICE_STATE": {
+      "title": "NET_CAMERA_SERVICE_STATE",
+      "description": "Статус сервиса IP-камеры (OK - отвечает, ERR_CONNECT - ошибка подключения, ERR_AUTH - ошибка авторизации, ERR_TIMEOUT - таймаут ответа, ERR_NO_STREAM - нет видеопотока, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "ERR_CONNECT", "ERR_AUTH", "ERR_TIMEOUT", "ERR_NO_STREAM", "UNKNOWN"],
+      "tsEnumNames": ["OK", "ERR_CONNECT", "ERR_AUTH", "ERR_TIMEOUT", "ERR_NO_STREAM", "UNKNOWN"]
+    },
+    "NET_NTP_STATE": {
+      "title": "NET_NTP_STATE",
+      "description": "Статус синхронизации времени NTP (OK - отвечает, SYNC - синхронизирован, UNSYNC - рассинхронизирован, ERR_NO_RESPONSE - нет ответа, ERR_BAD_TIME - некорректное время, ERR_STRATUM - неверный stratum, ERR_OFFSET - смещение времени, ERR_NO_SERVER - нет сервера, WARN_OFFSET - предупреждение по смещению, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "SYNC", "UNSYNC", "ERR_NO_RESPONSE", "ERR_BAD_TIME", "ERR_STRATUM", "ERR_OFFSET", "ERR_NO_SERVER", "WARN_OFFSET", "UNKNOWN"],
+      "tsEnumNames": ["OK", "SYNC", "UNSYNC", "ERR_NO_RESPONSE", "ERR_BAD_TIME", "ERR_STRATUM", "ERR_OFFSET", "ERR_NO_SERVER", "WARN_OFFSET", "UNKNOWN"]
+    },
+    "NET_DNS_STATE": {
+      "title": "NET_DNS_STATE",
+      "description": "Статус службы DNS (OK - в норме, ERR_NO_RESPONSE - нет ответа, ERR_BAD_RESPONSE - некорректный ответ, ERR_MISSING_RECORD - нет записи, ERR_WRONG_RECORD - ошибочная запись, ERR_BAD_RESOLVER - ошибка резолвера, ERR_LOCAL_RESOLVE - ошибка локального разрешения, ERR_EXTERNAL_RESOLVE - ошибка внешнего разрешения, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "ERR_NO_RESPONSE", "ERR_BAD_RESPONSE", "ERR_MISSING_RECORD", "ERR_WRONG_RECORD", "ERR_BAD_RESOLVER", "ERR_LOCAL_RESOLVE", "ERR_EXTERNAL_RESOLVE", "UNKNOWN"],
+      "tsEnumNames": ["OK", "ERR_NO_RESPONSE", "ERR_BAD_RESPONSE", "ERR_MISSING_RECORD", "ERR_WRONG_RECORD", "ERR_BAD_RESOLVER", "ERR_LOCAL_RESOLVE", "ERR_EXTERNAL_RESOLVE", "UNKNOWN"]
+    },
+    "NET_MQTT_STATE": {
+      "title": "NET_MQTT_STATE",
+      "description": "Статус брокера MQTT (OK - доступен и работает, ERR_TCP - нет TCP подключения, ERR_AUTH - ошибка авторизации, ERR_PUBSUB - ошибка Pub/Sub, ERR_LATENCY - высокая задержка, ERR_HUB_LOW/MID/HI - ошибки хабов, ERR_RECONNECTS - частые переподключения, WARN_STALE - устаревшие данные, ERR_INVALID - невалидные данные, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "ERR_TCP", "ERR_AUTH", "ERR_PUBSUB", "ERR_LATENCY", "ERR_HUB_LOW", "ERR_HUB_MID", "ERR_HUB_HI", "ERR_RECONNECTS", "WARN_STALE", "ERR_INVALID", "UNKNOWN"],
+      "tsEnumNames": ["OK", "ERR_TCP", "ERR_AUTH", "ERR_PUBSUB", "ERR_LATENCY", "ERR_HUB_LOW", "ERR_HUB_MID", "ERR_HUB_HI", "ERR_RECONNECTS", "WARN_STALE", "ERR_INVALID", "UNKNOWN"]
+    },
+    "NET_DB_SERVICE_STATE": {
+      "title": "NET_DB_SERVICE_STATE",
+      "description": "Статус базы данных Redis/MongoDB (OK - доступна и выполняет команды, ERR_TCP - нет TCP подключения, ERR_AUTH - ошибка авторизации, ERR_COMMAND - ошибка выполнения команд, WARN_LATENCY - высокая задержка, WARN_MEMORY - лимит памяти, ERR_REPLICA - ошибка реплики, WARN_STORAGE - лимит диска, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "ERR_TCP", "ERR_AUTH", "ERR_COMMAND", "WARN_LATENCY", "WARN_MEMORY", "ERR_REPLICA", "WARN_STORAGE", "UNKNOWN"],
+      "tsEnumNames": ["OK", "ERR_TCP", "ERR_AUTH", "ERR_COMMAND", "WARN_LATENCY", "WARN_MEMORY", "ERR_REPLICA", "WARN_STORAGE", "UNKNOWN"]
+    },
+    "NET_NODERED_STATE": {
+      "title": "NET_NODERED_STATE",
+      "description": "Статус Node-RED (OK - доступен и потоки работают, ERR_HTTP - API недоступен, ERR_FLOWS - ошибка потоков, ERR_MQTT - нет подключения к MQTT, ERR_DEPLOY - ошибка деплоя, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "ERR_HTTP", "ERR_FLOWS", "ERR_MQTT", "ERR_DEPLOY", "UNKNOWN"],
+      "tsEnumNames": ["OK", "ERR_HTTP", "ERR_FLOWS", "ERR_MQTT", "ERR_DEPLOY", "UNKNOWN"]
+    },
+    "NET_GRAYLOG_STATE": {
+      "title": "NET_GRAYLOG_STATE",
+      "description": "Статус службы логирования Graylog (OK - доступен и пишет логи, ERR_HTTP - API недоступен, ERR_INPUTS - остановлены inputs, ERR_INDEXER - ошибка индексатора, WARN_QUEUE - растёт очередь, ERR_HUB_LOW/MID/HI - ошибки отправки хабов, ERR_ROUTER - ошибка роутера, ERR_SW_POE - ошибка коммутатора, DELAYED - задержка доставки, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "ERR_HTTP", "ERR_INPUTS", "ERR_INDEXER", "WARN_QUEUE", "ERR_HUB_LOW", "ERR_HUB_MID", "ERR_HUB_HI", "ERR_ROUTER", "ERR_SW_POE", "DELAYED", "UNKNOWN"],
+      "tsEnumNames": ["OK", "ERR_HTTP", "ERR_INPUTS", "ERR_INDEXER", "WARN_QUEUE", "ERR_HUB_LOW", "ERR_HUB_MID", "ERR_HUB_HI", "ERR_ROUTER", "ERR_SW_POE", "DELAYED", "UNKNOWN"]
+    },
+    "NET_SECURITY_STATE": {
+      "title": "NET_SECURITY_STATE",
+      "description": "Статус сетевой безопасности (OK - нарушений нет, DETECTED - обнаружена угроза, WARN_OPEN_PORT - открытый порт, FAIL_FORBIDDEN_SERVICE - запрещенная служба, ERR_RULE_MISSING - нет правила, ERR_RULE_DISABLED - правило отключено, ERR_POLICY - нарушение политики, FAIL_DEFAULT_PASSWORD - дефолтный пароль, WARN_EXPIRED_CERT - истёк сертификат, WARN_TLS_NAME - ошибка TLS имени, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["OK", "DETECTED", "WARN_OPEN_PORT", "FAIL_FORBIDDEN_SERVICE", "ERR_RULE_MISSING", "ERR_RULE_DISABLED", "ERR_POLICY", "FAIL_DEFAULT_PASSWORD", "WARN_EXPIRED_CERT", "WARN_TLS_NAME", "UNKNOWN"],
+      "tsEnumNames": ["OK", "DETECTED", "WARN_OPEN_PORT", "FAIL_FORBIDDEN_SERVICE", "ERR_RULE_MISSING", "ERR_RULE_DISABLED", "ERR_POLICY", "FAIL_DEFAULT_PASSWORD", "WARN_EXPIRED_CERT", "WARN_TLS_NAME", "UNKNOWN"]
+    },
+    "NET_DEGRADED_STATE": {
+      "title": "NET_DEGRADED_STATE",
+      "description": "Режим деградации сети (NONE - нет деградации, CAMERAS_ONLY - только камеры, EXTERNAL_ONLY - только внешняя сеть, LOGGING_ONLY - только логи, SINGLE_HUB - один хаб, CORE_SERVICE - базовые сервисы, UNKNOWN - нет данных)",
+      "type": "string",
+      "enum": ["NONE", "CAMERAS_ONLY", "EXTERNAL_ONLY", "LOGGING_ONLY", "SINGLE_HUB", "CORE_SERVICE", "UNKNOWN"],
+      "tsEnumNames": ["NONE", "CAMERAS_ONLY", "EXTERNAL_ONLY", "LOGGING_ONLY", "SINGLE_HUB", "CORE_SERVICE", "UNKNOWN"]
+    },
+    "NetState": {
+      "title": "NetState",
+      "description": "Состояния сетевых служб и компонентов автомата",
+      "type": "object",
+      "properties": {
+        "Summary": {
+          "type": "object",
+          "description": "Агрегированные показатели сетевых подсистем",
+          "properties": {
+            "Apparatus": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
+            "LAN": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
+            "CoreServices": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
+            "Hubs": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
+            "Cameras": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
+            "Logging": { "$ref": "#/definitions/NET_SUMMARY_STATE" }
+          },
+          "required": ["Apparatus", "LAN", "CoreServices", "Hubs", "Cameras", "Logging"],
+          "additionalProperties": false
+        },
+        "Device": {
+          "type": "object",
+          "description": "Статусы сетевых устройств",
+          "properties": {
+            "Router": { "$ref": "#/definitions/NET_DEVICE_STATE" },
+            "SW_PoE": { "$ref": "#/definitions/NET_DEVICE_STATE" },
+            "Hub_Low": { "$ref": "#/definitions/NET_DEVICE_STATE" },
+            "Hub_Mid": { "$ref": "#/definitions/NET_DEVICE_STATE" },
+            "Hub_Hi": { "$ref": "#/definitions/NET_DEVICE_STATE" },
+            "Cam1": { "$ref": "#/definitions/NET_DEVICE_STATE" },
+            "Cam2": { "$ref": "#/definitions/NET_DEVICE_STATE" }
+          },
+          "required": ["Router", "SW_PoE", "Hub_Low", "Hub_Mid", "Hub_Hi", "Cam1", "Cam2"],
+          "additionalProperties": false
+        },
+        "Link": {
+          "type": "object",
+          "description": "Статусы физических линков",
+          "properties": {
+            "Router_Hub_Low": { "$ref": "#/definitions/NET_LINK_STATE" },
+            "Router_Hub_Mid": { "$ref": "#/definitions/NET_LINK_STATE" },
+            "Router_Hub_Hi": { "$ref": "#/definitions/NET_LINK_STATE" },
+            "Router_SW_PoE": { "$ref": "#/definitions/NET_LINK_STATE" },
+            "SW_PoE_Cam1": { "$ref": "#/definitions/NET_LINK_STATE" },
+            "SW_PoE_Cam2": { "$ref": "#/definitions/NET_LINK_STATE" }
+          },
+          "required": ["Router_Hub_Low", "Router_Hub_Mid", "Router_Hub_Hi", "Router_SW_PoE", "SW_PoE_Cam1", "SW_PoE_Cam2"],
+          "additionalProperties": false
+        },
+        "IP": {
+          "type": "object",
+          "description": "Состояние IP-адресации, ARP и шлюза",
+          "properties": {
+            "Plan": { "$ref": "#/definitions/NET_IP_STATE" },
+            "ARP": { "$ref": "#/definitions/NET_ARP_STATE" },
+            "Gateway": { "$ref": "#/definitions/NET_GATEWAY_STATE" }
+          },
+          "required": ["Plan", "ARP", "Gateway"],
+          "additionalProperties": false
+        },
+        "Route": {
+          "type": "object",
+          "description": "Состояние сетевых маршрутов",
+          "properties": {
+            "Local": { "$ref": "#/definitions/NET_ROUTE_STATE" },
+            "Internet": { "$ref": "#/definitions/NET_ROUTE_STATE" },
+            "VPN": { "$ref": "#/definitions/NET_ROUTE_STATE" }
+          },
+          "required": ["Local", "Internet", "VPN"],
+          "additionalProperties": false
+        },
+        "Quality": {
+          "type": "object",
+          "description": "Показатели качества связи",
+          "properties": {
+            "LAN": { "$ref": "#/definitions/NET_QUALITY_STATE" }
+          },
+          "required": ["LAN"],
+          "additionalProperties": false
+        },
+        "PoE": {
+          "type": "object",
+          "description": "Состояние питания PoE",
+          "properties": {
+            "SW_PoE": { "$ref": "#/definitions/NET_POE_STATE" },
+            "Cam1": { "$ref": "#/definitions/NET_POE_STATE" },
+            "Cam2": { "$ref": "#/definitions/NET_POE_STATE" }
+          },
+          "required": ["SW_PoE", "Cam1", "Cam2"],
+          "additionalProperties": false
+        },
+        "Camera": {
+          "type": "object",
+          "description": "Состояния сервисов видеокамер",
+          "properties": {
+            "Cam1_HTTP": { "$ref": "#/definitions/NET_CAMERA_SERVICE_STATE" },
+            "Cam2_HTTP": { "$ref": "#/definitions/NET_CAMERA_SERVICE_STATE" },
+            "Cam1_RTSP": { "$ref": "#/definitions/NET_CAMERA_SERVICE_STATE" },
+            "Cam2_RTSP": { "$ref": "#/definitions/NET_CAMERA_SERVICE_STATE" }
+          },
+          "required": ["Cam1_HTTP", "Cam2_HTTP", "Cam1_RTSP", "Cam2_RTSP"],
+          "additionalProperties": false
+        },
+        "NTP": {
+          "type": "object",
+          "description": "Состояния службы времени NTP",
+          "properties": {
+            "Server": { "$ref": "#/definitions/NET_NTP_STATE" },
+            "Hub_Low": { "$ref": "#/definitions/NET_NTP_STATE" },
+            "Hub_Mid": { "$ref": "#/definitions/NET_NTP_STATE" },
+            "Hub_Hi": { "$ref": "#/definitions/NET_NTP_STATE" },
+            "Cameras": { "$ref": "#/definitions/NET_NTP_STATE" }
+          },
+          "required": ["Server", "Hub_Low", "Hub_Mid", "Hub_Hi", "Cameras"],
+          "additionalProperties": false
+        },
+        "DNS": {
+          "type": "object",
+          "description": "Состояние службы разрешение имён DNS",
+          "properties": {
+            "Server": { "$ref": "#/definitions/NET_DNS_STATE" },
+            "LocalRecords": { "$ref": "#/definitions/NET_DNS_STATE" },
+            "HubsResolver": { "$ref": "#/definitions/NET_DNS_STATE" }
+          },
+          "required": ["Server", "LocalRecords", "HubsResolver"],
+          "additionalProperties": false
+        },
+        "MQTT": {
+          "type": "object",
+          "description": "Состояние службы сообщений MQTT",
+          "properties": {
+            "Server": { "$ref": "#/definitions/NET_MQTT_STATE" },
+            "Clients": { "$ref": "#/definitions/NET_MQTT_STATE" },
+            "Retained": { "$ref": "#/definitions/NET_MQTT_STATE" }
+          },
+          "required": ["Server", "Clients", "Retained"],
+          "additionalProperties": false
+        },
+        "Redis": {
+          "type": "object",
+          "description": "Состояние оперативной БД Redis",
+          "properties": {
+            "Server": { "$ref": "#/definitions/NET_DB_SERVICE_STATE" }
+          },
+          "required": ["Server"],
+          "additionalProperties": false
+        },
+        "MongoDB": {
+          "type": "object",
+          "description": "Состояние долгосрочной БД MongoDB",
+          "properties": {
+            "Server": { "$ref": "#/definitions/NET_DB_SERVICE_STATE" }
+          },
+          "required": ["Server"],
+          "additionalProperties": false
+        },
+        "NodeRED": {
+          "type": "object",
+          "description": "Состояние службы Node-RED на хабах",
+          "properties": {
+            "Hub_Low": { "$ref": "#/definitions/NET_NODERED_STATE" },
+            "Hub_Mid": { "$ref": "#/definitions/NET_NODERED_STATE" },
+            "Hub_Hi": { "$ref": "#/definitions/NET_NODERED_STATE" }
+          },
+          "required": ["Hub_Low", "Hub_Mid", "Hub_Hi"],
+          "additionalProperties": false
+        },
+        "Graylog": {
+          "type": "object",
+          "description": "Состояние центрального сервиса логирования Graylog",
+          "properties": {
+            "Server": { "$ref": "#/definitions/NET_GRAYLOG_STATE" },
+            "Delivery_Hubs": { "$ref": "#/definitions/NET_GRAYLOG_STATE" },
+            "Delivery_Network": { "$ref": "#/definitions/NET_GRAYLOG_STATE" }
+          },
+          "required": ["Server", "Delivery_Hubs", "Delivery_Network"],
+          "additionalProperties": false
+        },
+        "Security": {
+          "type": "object",
+          "description": "Показатели сетевой безопасности",
+          "properties": {
+            "UnknownDevice": { "$ref": "#/definitions/NET_SECURITY_STATE" },
+            "OpenPorts": { "$ref": "#/definitions/NET_SECURITY_STATE" },
+            "Firewall": { "$ref": "#/definitions/NET_SECURITY_STATE" },
+            "Credentials": { "$ref": "#/definitions/NET_SECURITY_STATE" }
+          },
+          "required": ["UnknownDevice", "OpenPorts", "Firewall", "Credentials"],
+          "additionalProperties": false
+        },
+        "Mode": {
+          "type": "object",
+          "description": "Режимы деградации сетевой инфраструктуры",
+          "properties": {
+            "Degraded": { "$ref": "#/definitions/NET_DEGRADED_STATE" }
+          },
+          "required": ["Degraded"],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "Summary",
+        "Device",
+        "Link",
+        "IP",
+        "Route",
+        "Quality",
+        "PoE",
+        "Camera",
+        "NTP",
+        "DNS",
+        "MQTT",
+        "Redis",
+        "MongoDB",
+        "NodeRED",
+        "Graylog",
+        "Security",
+        "Mode"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

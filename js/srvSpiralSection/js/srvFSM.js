@@ -74,6 +74,7 @@ class ClassFSM {
         
         if (typeof state === 'string') {
             this.#ChangeState({ 
+                eventName,
                 state, 
                 action: typeof action === 'function' ? () => action(...args) : () => {} 
             });
@@ -81,8 +82,8 @@ class ClassFSM {
     }
 
     // Убрали async/await. Смена состояния происходит строго синхронно.
-    #ChangeState({ state, action }) {
-        this.#_Queue.push({ state, action });
+    #ChangeState({ eventName, state, action }) {
+        this.#_Queue.push({ eventName, state, action });
         this.#Process(); 
     }
 
@@ -91,14 +92,14 @@ class ClassFSM {
         this.#_Processing = true;
 
         while (this.#_Queue.length > 0) {
-            const { state, action } = this.#_Queue.shift();
+            const { eventName, state, action } = this.#_Queue.shift();
             
             this.#_PrevState = this._State;
             this._State = state;
             this.#_StateChangeTimestamp = Date.now();
 
             if (typeof this.OnStateChanged === 'function') {
-                this.OnStateChanged({ state, prevState: this.#_PrevState });
+                this.OnStateChanged({ eventName, state, prevState: this.#_PrevState });
             }
 
             try {

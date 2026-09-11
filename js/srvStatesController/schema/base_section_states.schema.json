@@ -1,0 +1,212 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BaseSectionState",
+  "description": "JSON Schema для базового состояния секции (BaseSectionState)",
+  "type": "object",
+  "properties": {
+    "Name": {
+      "type": "string",
+      "description": "Наименование секции (например, 'spiral', 'postomat')"
+    },
+    "IsAvailable": {
+      "$ref": "#/definitions/AVAILABLE_STATE"
+    },
+    "Door": {
+      "$ref": "#/definitions/DOOR_STATE"
+    },
+    "Status": {
+      "$ref": "#/definitions/SECTION_STATUS"
+    },
+    "Command": {
+      "$ref": "#/definitions/COMMAND_STATE"
+    },
+    "Rows": {
+      "type": "array",
+      "description": "Массив состояний строк (полок) секции",
+      "items": {
+        "$ref": "#/definitions/LINE_STATE"
+      }
+    },
+    "Cols": {
+      "type": "array",
+      "description": "Массив состояний столбцов секции",
+      "items": {
+        "$ref": "#/definitions/LINE_STATE"
+      }
+    },
+    "Cells": {
+      "type": "array",
+      "description": "Массив состояний ячеек секции",
+      "items": {
+        "$ref": "#/definitions/TYPE_CELL"
+      }
+    },
+    "CellsTransact": {
+      "type": "array",
+      "description": "Массив транзакционных состояний ячеек",
+      "items": {
+        "$ref": "#/definitions/TRANSACT_STATE"
+      }
+    },
+    "Resourse_available": {
+      "type": "array",
+      "description": "Массив флагов доступности моторесурса по ячейкам",
+      "items": {
+        "$ref": "#/definitions/AVAILABLE_STATE"
+      }
+    },
+    "IO": {
+      "type": "object",
+      "description": "Словарь состояний модулей ввода-вывода (IO)",
+      "additionalProperties": {
+        "$ref": "#/definitions/TYPE_IO"
+      }
+    }
+  },
+  "required": [
+    "Name",
+    "IsAvailable",
+    "Status",
+    "Rows",
+    "Cols",
+    "Cells",
+    "CellsTransact",
+    "Resourse_available",
+    "IO"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "AVAILABLE_STATE": {
+      "title": "AVAILABLE_STATE",
+      "description": "Флаг доступности (YES - доступно/в норме, NO - недоступно/исчерпано)",
+      "type": "string",
+      "enum": ["YES", "NO"],
+      "tsEnumNames": ["YES", "NO"]
+    },
+    "DOOR_STATE": {
+      "title": "DOOR_STATE",
+      "description": "Состояние сервисной двери секции (CLOSED - закрыта, OPEN - открыта)",
+      "type": "string",
+      "enum": ["CLOSED", "OPEN"],
+      "tsEnumNames": ["CLOSED", "OPEN"]
+    },
+    "COMMAND_STATE": {
+      "title": "COMMAND_STATE",
+      "description": "Состояние выполнения команд (IDLE - ожидание команды, COMMAND - выполнение команды, BLOCKED - заблокировано)",
+      "type": "string",
+      "enum": ["IDLE", "COMMAND", "BLOCKED"],
+      "tsEnumNames": ["IDLE", "COMMAND", "BLOCKED"]
+    },
+    "SECTION_STATUS": {
+      "title": "SECTION_STATUS",
+      "description": "Статус выполнения операций секции (IDLE - простой, DISPENSE - выдача ТМЦ, DELIVERY - доставка, BLOCKED - заблокирована, LOADING - загрузка ТМЦ)",
+      "type": "string",
+      "enum": ["IDLE", "DISPENSE", "DELIVERY", "BLOCKED", "LOADING"],
+      "tsEnumNames": ["IDLE", "DISPENSE", "DELIVERY", "BLOCKED", "LOADING"]
+    },
+    "LINE_STATE": {
+      "title": "LINE_STATE",
+      "description": "Состояние строки или столбца секции (OK - в норме, BLOCKED - заблокирован)",
+      "type": "string",
+      "enum": ["OK", "BLOCKED"],
+      "tsEnumNames": ["OK", "BLOCKED"]
+    },
+    "CELL_STATE": {
+      "title": "CELL_STATE",
+      "description": "Флаги состояния ячейки (OK - штатно, OVERLOAD_I - повышенный ток, OVERLOAD_V - повышенное напряжение, BLOCKED - заблокирована, ERROR - ошибка, SERVICE - обслуживание, ERR_TAMPER - ошибка тампера, ERR_TAMPER_BAD_POS - некорректная позиция, ACTUATOR_SHORT_CIRCUIT - КЗ актуатора, ACTUATOR_NO_POWER - нет питания, ERR_MECHANICAL - механическая поломка, OVERLOAD - перегрузка, NOT_CLOSED - ячейка открыта слишком долго)",
+      "type": "string",
+      "enum": [
+        "OK",
+        "OVERLOAD_I",
+        "OVERLOAD_V",
+        "BLOCKED",
+        "ERROR",
+        "SERVICE",
+        "ERR_TAMPER",
+        "ERR_TAMPER_BAD_POS",
+        "ACTUATOR_SHORT_CIRCUIT",
+        "ACTUATOR_NO_POWER",
+        "ERR_MECHANICAL"
+      ],
+      "tsEnumNames": [
+        "OK",
+        "OVERLOAD_I",
+        "OVERLOAD_V",
+        "BLOCKED",
+        "ERROR",
+        "SERVICE",
+        "ERR_TAMPER",
+        "ERR_TAMPER_BAD_POS",
+        "ACTUATOR_SHORT_CIRCUIT",
+        "ACTUATOR_NO_POWER",
+        "ERR_MECHANICAL"
+      ]
+    },
+    "CELL_ACTION": {
+      "title": "CELL_ACTION",
+      "description": "Флаги состояния действия ячейки (IDLE - закрыта/в ждущем режиме, ACTION - отрабатывает команду выдачи, OPEN - открыта, NOT_CLOSED - открыта слишком долго)", 
+      "type": "string",
+      "enum": ["IDLE", "ACTION", "OPEN", "NOT_CLOSED"],
+      "tsEnumNames": ["IDLE", "ACTION", "OPEN", "NOT_CLOSED"]
+    },
+    "TYPE_CELL": {
+      "title": "TYPE_CELL",
+      "description": "Объект состояния ячейки секции (Status, Action)",
+      "type": "object",
+      "properties": {
+        "Status": {
+          "$ref": "#/definitions/CELL_STATE"
+        },
+        "Action": {
+          "$ref": "#/definitions/CELL_ACTION"
+        }
+      },
+      "required": ["Status", "Action"],
+      "additionalProperties": false
+    },
+    "TRANSACT_STATE": {
+      "title": "TRANSACT_STATE",
+      "description": "Транзакционное состояние выполнения операции над ячейкой (OK - готова, EXECUTING - выполняется, COMPLETED - завершена, WARNING - предупреждение)",
+      "type": "string",
+      "enum": ["OK", "EXECUTING", "COMPLETED", "WARNING"],
+      "tsEnumNames": ["OK", "EXECUTING", "COMPLETED", "WARNING"]
+    },
+    "IO_STATE": {
+      "title": "IO_STATE",
+      "description": "Состояние модуля ввода-вывода (OK - в норме, ERR_NO_LINK - потеряно соединение с IO модулем)",
+      "type": "string",
+      "enum": ["OK", "ERR_NO_LINK"],
+      "tsEnumNames": ["OK", "ERR_NO_LINK"]
+    },
+    "IO_PORT_STATE": {
+      "title": "IO_PORT_STATE",
+      "description": "Состояние порта модуля ввода-вывода (OK - в норме, ERROR - порт повреждён)",
+      "type": "string",
+      "enum": ["OK", "ERROR"],
+      "tsEnumNames": ["OK", "ERROR"]
+    },
+    "TYPE_IO": {
+      "title": "TYPE_IO",
+      "description": "Объект состояния и конфигурации модуля ввода-вывода (IO)",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Имя модуля ввода-вывода"
+        },
+        "state": {
+          "$ref": "#/definitions/IO_STATE"
+        },
+        "ports": {
+          "type": "array",
+          "description": "Массив состояний портов IO модуля",
+          "items": {
+            "$ref": "#/definitions/IO_PORT_STATE"
+          }
+        }
+      },
+      "required": ["name", "state", "ports"],
+      "additionalProperties": false
+    }
+  }
+}
