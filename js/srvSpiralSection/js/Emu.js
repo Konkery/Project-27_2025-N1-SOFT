@@ -195,7 +195,7 @@ class Matrix {
     }
 
     setSource(col, val) {
-        console.log(`[EMU] setSource(${col}, ${val})`);
+        // console.log(`[EMU] setSource(${col}, ${val})`);
         if (col < 0 || col >= this.cols) throw Error(`Invalid col value`);
         // if (!this.fault.sourceStuckOn[row]) {
         this.sourceState[col] = val ? 1 : 0;
@@ -203,7 +203,7 @@ class Matrix {
     }
     
     setGround(row, val) {
-        console.log(`[EMU] setGround(${row}, ${val})`);
+        // console.log(`[EMU] setGround(${row}, ${val})`);
         if (row < 0 || row >= this.rows) throw Error(`Invalid row value`);
         // if (!this.fault.groundStuckOn[row]) {
         this.groundState[row] = val ? 1 : 0;
@@ -352,7 +352,7 @@ class SpiralSection {
             // console.log(`[EMU] Ток спирали ${this.values.current}`);
             this.values.spiralTamperChannels[row] = STORAGE_CONSTANSTS.TAMPER_OFF;
             this.rotInterv = setInterval(() => {
-                if (!this.faults.hasFault(FAULTS.TAMPER_ERROR)) {
+                if (!this.faults.hasFault(FAULTS.ERR_TAMPER)) {
                     this.values.spiralTamperChannels[row] = STORAGE_CONSTANSTS.TAMPER_ON;
                     this.emitDispensed({ row, col });
 
@@ -389,7 +389,7 @@ class HBridge {
     }
 
     setSwitch(chNum, val) {
-        console.log(`[EMU] setSwitch(${chNum}, ${val})`);
+        // console.log(`[EMU] setSwitch(${chNum}, ${val})`);
         this.hbridgeSwState[chNum] = val;
         this._recalcHBridge();
     }
@@ -572,7 +572,7 @@ class Lift {
                 // console.log(`[EMU] Ток лифта - OVERLOAD`);
                 // this.values.current = peekValueInRange(LIFT_CONSTANTS.CURRENT_RANGE.OVERLOAD); // вернуть overload
             }
-            this.log(`[EMU] Лифт на уровне ${this.currentLevel}`);
+            // this.log(`[EMU] Лифт на уровне ${this.currentLevel}`);
 
         }, timeout);
     }
@@ -708,7 +708,7 @@ class CellSection {
         } else {
             this.values.current = peekValueInRange(CELL_CONSTANTS.CURRENT_RANGE.WORK_OK);
 
-            if (!this.faults.hasFault(FAULTS.TAMPER_ERROR)) {
+            if (!this.faults.hasFault(FAULTS.ERR_TAMPER)) {
 
                 this.unlockTimeout = setTimeout(() => {
                     let ind = row * this.matrix.cols + col;
