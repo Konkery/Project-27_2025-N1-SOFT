@@ -576,6 +576,11 @@ class ClassSpiralSectionLift {
             current_2 = this.#_ProxyCh.GetValue(this.#_Channels.current);
             this._ProxyLogger.Log({ level: 'D', msg: `I = ${current_2}` });
             // ток обновился
+            /**
+             * проверка if (current_2 >= CURRENT_RANGE.WORK_OK[0]) return; стоит раньше if (this.IsShorted()) и проверяет только нижнюю границу 0.08А. Из-за этого IsShorted() внутри Elevate() срабатывает только тогда, когда при КЗ блок питания уходит в защиту по напряжению (voltage <=│ 16V) и ток падает ниже 0.08А, а при высоком токе > 5А │ Elevate() считает, что мотор успешно запустился, и передает отлов КЗ фоновому StartPSUWatch.
+             * ------------------
+             * Опасный момент но так было сделано чтобы не блокировать лифт при запуске, когда ток может быть выше 5А и при этом мотор успешно запустился. Поэтому проверка на КЗ стоит далее.
+             */
             if (current_2 >= CURRENT_RANGE.WORK_OK[0]) {
                 this._ProxyLogger.Log({ level: 'D', msg: `Ток обновился до ${current_2.toFixed(2)} спустя ~${elapsed} мс` })
                 this.#_Context.movingDir = fwd ? 1 : -1;

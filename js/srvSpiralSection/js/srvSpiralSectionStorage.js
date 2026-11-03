@@ -462,7 +462,8 @@ class ClassSpiralSectionStorage {
                 if (typeof unitIndex == 'number') {
                     const { row, col: column } = this.#_Context.units[unitIndex].coords;
                     this.#_Events.emit('fail', { row, column }, fault);
-                    this.MotorOff(unitIndex);
+                    // TODO: ранее MotorOff вызывался без await, необходимо проследить что добавление await это не приведет к проблемам в дальнейшем
+                    await this.MotorOff(unitIndex);
                 }
             }
             this.#_FSM.Dispatch(this.EVENTS.RECOVERED);
@@ -927,7 +928,7 @@ class ClassSpiralSectionStorage {
                 break;
 
             case FAULTS.TAMPER_BAD_POS:
-                this.UpdateStorageContext({ index }, { scope: 'row', status: SPIRAL_CELL_STATE.TAMPER_BAD_POS, except: STATUS_EXCEPT });
+                this.UpdateStorageContext({ index }, { scope: 'row', status: SPIRAL_CELL_STATE.ERR_TAMPER_BAD_POS, except: STATUS_EXCEPT });
                 break;
 
             case FAULTS.ACTUATOR_NO_POWER:
