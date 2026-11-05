@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const { ClassSpiralSectionStorage } = require('../../../js/srvSpiralSectionStorage');
 const { FAULTS } = require('../../../js/SpiralSectionConstants');
 const { SpiralSectionState, SPIRAL_CELL_STATE } = require('../../../js/srvSpiralSectionStates');
-const { ProxyChannelStub } = require('../../helpers/ProxyChannelStub');
-const { SpiralSection } = require('../../../js/Emu');
+const { ProxyChannelStub } = require('../../../../../tests/helpers/ProxyChannelStub');
+const { SpiralSection } = require('../../../../VMEmulator');
 
 // --- Инженерные константы конфигурации матрицы ---
 const ROWS = 4;

@@ -5,8 +5,8 @@ const { ClassSpiralSectionStorage } = require('../../../js/srvSpiralSectionStora
 const { STORAGE_CONSTANSTS, COMMON_CONSTANTS, FAULTS } = require('../../../js/SpiralSectionConstants');
 const { SpiralSectionState, SPIRAL_CELL_STATE } = require('../../../js/srvSpiralSectionStates');
 const { CELL_ACTION } = require('../../../../srvStatesController/ts/ISpiralSectionStates');
-const { ProxyChannelStub } = require('../../helpers/ProxyChannelStub');
-const { SpiralSection } = require('../../../js/Emu');
+const { ProxyChannelStub } = require('../../../../../tests/helpers/ProxyChannelStub');
+const { SpiralSection } = require('../../../../VMEmulator');
 
 // --- Параметры аппаратного протокола коммутации матрицы ---
 const TIME_BETWEEN_STEPS_MS = 300;

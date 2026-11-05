@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const { ClassSpiralSectionLift } = require('../../../js/srvSpiralSectionLift');
 const { LIFT_CONSTANTS, COMMON_CONSTANTS, FAULTS } = require('../../../js/SpiralSectionConstants');
 const { SpiralSectionState, LIFT_STATE } = require('../../../js/srvSpiralSectionStates');
-const { ProxyChannelStub } = require('../../helpers/ProxyChannelStub');
-const { Lift } = require('../../../js/Emu');
+const { ProxyChannelStub } = require('../../../../../tests/helpers/ProxyChannelStub');
+const { Lift } = require('../../../../VMEmulator');
 
 // --- Параметры тестовой конфигурации аппаратной секции ---
 const SECTION_ROWS = 6;

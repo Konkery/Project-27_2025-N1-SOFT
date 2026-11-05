@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const { ClassSpiralSectionStorage } = require('../../../js/srvSpiralSectionStorage');
 const { STORAGE_CONSTANSTS, COMMON_CONSTANTS } = require('../../../js/SpiralSectionConstants');
 const { SpiralSectionState } = require('../../../js/srvSpiralSectionStates');
-const { ProxyChannelStub } = require('../../helpers/ProxyChannelStub');
-const { SpiralSection, peekValueInRange, getRangeAbove, getRangeBelow } = require('../../../js/Emu');
+const { ProxyChannelStub } = require('../../../../../tests/helpers/ProxyChannelStub');
+const { SpiralSection, peekValueInRange, getRangeAbove, getRangeBelow } = require('../../../../VMEmulator');
 
 // --- Инженерные константы конфигурации матрицы и буферов ---
 const ROWS = 4;

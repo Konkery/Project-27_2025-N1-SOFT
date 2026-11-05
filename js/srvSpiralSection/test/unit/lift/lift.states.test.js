@@ -5,8 +5,8 @@ const { ClassSpiralSectionLift } = require('../../../js/srvSpiralSectionLift');
 const { LIFT_CONSTANTS, FAULTS } = require('../../../js/SpiralSectionConstants');
 const { SpiralSectionState, LIFT_STATE } = require('../../../js/srvSpiralSectionStates');
 const { ClassFault: Fault } = require('../../../js/srvUtils');
-const { ProxyChannelStub } = require('../../helpers/ProxyChannelStub');
-const { Lift } = require('../../../js/Emu');
+const { ProxyChannelStub } = require('../../../../../tests/helpers/ProxyChannelStub');
+const { Lift } = require('../../../../VMEmulator');
 
 // --- Инженерные константы конфигурации секции ---
 const SECTION_ROWS = 6;
