@@ -7,35 +7,13 @@ const { SpiralSectionState, LIFT_STATE } = require('../../../js/srvSpiralSection
 const { ProxyChannelStub } = require('../../helpers/ProxyChannelStub');
 const { Lift } = require('../../../js/Emu');
 
-// --- Константы, отражающие внутренние параметры ClassSpiralSectionLift (не вынесенные в SpiralSectionConstants) ---
-const BOTTOM_LEVEL = 0;
-const PSU_OFF_VAL = 0;
-const PSU_ON_VAL = 1;
-const MOTOR_STEP_FIRST = 1;
-const MON_LIFT_LEVEL_METRIC = 0.15;
-const INIT_STOP_SETTLE_MS = 70; // Ожидание стартового Stop() в Init() (где цикл ждет sleep(50))
-
-// --- Константы тестовой фикстуры и сценариев движения ---
+// --- Параметры тестовой конфигурации аппаратной секции ---
 const SECTION_ROWS = 6;
 const SECTION_COLS = 8;
 const BUS_NUMBER = 1;
 const MAX_LEVEL = 6;
-
-const TRAVEL_TO_BOTTOM_STEPS = 1;
-const TRAVEL_TO_BOTTOM_INTERVAL_MS = 30;
-const PARALLEL_OP_STEPS = 0;
-const PARALLEL_OP_INTERVAL_MS = 80;
-
-const TARGET_LEVEL_3 = 3;
-const START_LEVEL_4 = 4;
-const TARGET_LEVEL_2 = 2;
-const TARGET_LEVEL_5 = 5;
-const DOWN_STEPS_4_TO_2 = 2;
-
-const STEP_INTERVAL_NORMAL_MS = 25;
-const STEP_INTERVAL_FAST_MS = 20;
-const IN_MOTION_TRIGGER_DELAY_MS = 30;
-const RESET_DURING_MOVE_DELAY_MS = 180;
+const MON_LIFT_LEVEL_METRIC = 0.15;
+const INIT_STOP_SETTLE_MS = 70; // Ожидание стартового Stop() в Init() (где цикл ждет sleep(50))
 
 describe('ClassSpiralSectionLift — управление актуаторами и установка лифта в позицию (Hardware & Positioning)', () => {
     let stub;
@@ -114,18 +92,18 @@ describe('ClassSpiralSectionLift — управление актуаторами
     describe('Низкоуровневые команды актуаторов: OffPSU(), OnPSU(), MotorStep(), StopForce()', () => {
         it('OffPSU() записывает 0 в канал psuWork, а OnPSU() записывает 1', () => {
             lift.OffPSU();
-            assert.equal(stub.getLastSentValue(channels.psuWork), PSU_OFF_VAL);
+            assert.equal(stub.getLastSentValue(channels.psuWork), 0);
 
             lift.OnPSU();
-            assert.equal(stub.getLastSentValue(channels.psuWork), PSU_ON_VAL);
-            assert.deepEqual(stub.getSentValues(channels.psuWork), [PSU_OFF_VAL, PSU_ON_VAL]);
+            assert.equal(stub.getLastSentValue(channels.psuWork), 1);
+            assert.deepEqual(stub.getSentValues(channels.psuWork), [0, 1]);
         });
 
         it('MotorStep() отправляет команду шагового управления в канал liftMotorCtrl', () => {
-            lift.MotorStep('Forward', { step: MOTOR_STEP_FIRST });
+            lift.MotorStep('Forward', { step: 1 });
             assert.deepEqual(stub.getLastSentValue(channels.liftMotorCtrl), {
                 cmd: 'Forward',
-                args: [{ step: MOTOR_STEP_FIRST }],
+                args: [{ step: 1 }],
             });
         });
 
@@ -241,7 +219,7 @@ describe('ClassSpiralSectionLift — управление актуаторами
 
             await lift.ElevateToBottom();
 
-            assert.equal(lift.Level, BOTTOM_LEVEL);
+            assert.equal(lift.Level, 0);
             assert.equal(lift.State, ClassSpiralSectionLift.STATE.IDLE);
             // Команда 'DOWN' не подавалась, вызвался только Stop() при переходе в Idle()
             assert.equal(stub.getSentValues(channels.liftMotorCtrl2).includes('DOWN'), false);
@@ -251,14 +229,14 @@ describe('ClassSpiralSectionLift — управление актуаторами
             // Лифт находится выше нижнего концевика
             emu.setBottomTamper(false, { emit: false });
             emu.simulateTravel({
-                stepsCount: TRAVEL_TO_BOTTOM_STEPS,
+                stepsCount: 1,
                 reachBottom: true,
-                stepIntervalMs: TRAVEL_TO_BOTTOM_INTERVAL_MS,
+                stepIntervalMs: 30,
             });
 
             await lift.ElevateToBottom();
 
-            assert.equal(lift.Level, BOTTOM_LEVEL);
+            assert.equal(lift.Level, 0);
             assert.equal(lift.State, ClassSpiralSectionLift.STATE.IDLE);
             assert.deepEqual(stub.getSentValues(channels.liftMotorCtrl2), ['STOP', 'DOWN', 'STOP']);
         });
@@ -275,9 +253,9 @@ describe('ClassSpiralSectionLift — управление актуаторами
         it('отклоняет параллельный вызов операции, пока предыдущая команда перемещения еще выполняется', async () => {
             emu.setBottomTamper(false, { emit: false });
             emu.simulateTravel({
-                stepsCount: PARALLEL_OP_STEPS,
+                stepsCount: 0,
                 reachBottom: true,
-                stepIntervalMs: PARALLEL_OP_INTERVAL_MS,
+                stepIntervalMs: 80,
             });
 
             const firstTask = lift.ElevateToBottom();
@@ -303,57 +281,95 @@ describe('ClassSpiralSectionLift — управление актуаторами
 
         it('поднимает лифт с 0-го на 3-й уровень ("UP"), отсчитывая 3 импульса датчика уровня liftLevelSensor, и останавливает привод', async () => {
             emu.simulateTravel({
-                stepsCount: TARGET_LEVEL_3,
-                stepIntervalMs: STEP_INTERVAL_NORMAL_MS,
+                stepsCount: 3,
+                stepIntervalMs: 25,
             });
 
-            await lift.ElevateToLevel(TARGET_LEVEL_3);
+            await lift.ElevateToLevel(3);
 
-            assert.equal(lift.Level, TARGET_LEVEL_3);
+            assert.equal(lift.Level, 3);
             assert.equal(lift.State, ClassSpiralSectionLift.STATE.IDLE);
             assert.deepEqual(stub.getSentValues(channels.liftMotorCtrl2), ['STOP', 'UP', 'STOP']);
             // На каждом из 3 уровней отправлялась метрика MON_LIFT_LEVEL_METRIC (0.15) в канал мониторинга monLift
             assert.deepEqual(
                 stub.getSentValues(channels.monLift),
-                Array(TARGET_LEVEL_3).fill(MON_LIFT_LEVEL_METRIC)
+                Array(3).fill(MON_LIFT_LEVEL_METRIC)
             );
         });
 
         it('опускает лифт с 4-го на 2-й уровень ("DOWN"), уменьшая счетчик уровня на каждом импульсе датчика', async () => {
             // Сначала поднимаем лифт на 4-й уровень
             let off = emu.simulateTravel({
-                stepsCount: START_LEVEL_4,
-                stepIntervalMs: STEP_INTERVAL_FAST_MS,
+                stepsCount: 4,
+                stepIntervalMs: 20,
             });
-            await lift.ElevateToLevel(START_LEVEL_4);
-            assert.equal(lift.Level, START_LEVEL_4);
+            await lift.ElevateToLevel(4);
+            assert.equal(lift.Level, 4);
             off();
             stub.clearHistory();
 
             // Теперь спускаем с 4-го на 2-й уровень (2 импульса вниз)
             off = emu.simulateTravel({
-                stepsCount: DOWN_STEPS_4_TO_2,
-                stepIntervalMs: STEP_INTERVAL_FAST_MS,
+                stepsCount: 2,
+                stepIntervalMs: 20,
             });
-            await lift.ElevateToLevel(TARGET_LEVEL_2);
+            await lift.ElevateToLevel(2);
             off();
 
-            assert.equal(lift.Level, TARGET_LEVEL_2);
+            assert.equal(lift.Level, 2);
             assert.equal(lift.State, ClassSpiralSectionLift.STATE.IDLE);
             assert.deepEqual(stub.getSentValues(channels.liftMotorCtrl2), ['STOP', 'DOWN', 'STOP']);
+        });
+
+        it('игнорирует однократный бросок тока выше порога КЗ во время движения (фильтрация помехи / пускового броска) и успешно достигает уровня', async () => {
+            emu.simulateTravel({
+                stepsCount: 3,
+                stepIntervalMs: 80,
+                startDelayMs: 60,
+            });
+
+            // Во время активного движения (через 250 мс, когда мотор уже запущен)
+            // кратковременный бросок тока на 60 мс не должен вызывать аварию (short_count < 2)
+            setTimeout(() => {
+                emu.pulseCurrent(emu.CURR.short, 60, emu.CURR.workOk);
+            }, 250);
+
+            await lift.ElevateToLevel(3);
+
+            assert.equal(lift.Level, 3);
+            assert.equal(lift.State, ClassSpiralSectionLift.STATE.IDLE);
+            assert.equal(sectionState.Lift, LIFT_STATE.OK);
+        });
+
+        it('прерывает перемещение с ошибкой FAULTS.LIFT_SHORT_CIRCUIT при устойчивом токе КЗ в течение 2 интервалов монитора', async () => {
+            emu.attachMotorBehavior({
+                onStartMove: async () => {
+                    // Через 50 мс после старта ток уходит в устойчивое КЗ (более 2 тактов монитора по 200 мс)
+                    await new Promise((r) => setTimeout(r, 50));
+                    emu.setCurrent(emu.CURR.short);
+                },
+            });
+
+            await assert.rejects(
+                () => lift.ElevateToLevel(3),
+                (fault) => fault.code === FAULTS.LIFT_SHORT_CIRCUIT
+            );
+
+            assert.equal(sectionState.Lift, LIFT_STATE.SHORT_CIRCUIT);
+            assert.equal(stub.getLastSentValue(channels.liftMotorCtrl2), 'STOP');
         });
 
         it('прерывает подъем с ошибкой FAULTS.LEVEL_SENSOR_FAIL и останавливает мотор при срабатывании верхнего аварийного концевика liftTopTamper', async () => {
             emu.attachMotorBehavior({
                 onStartMove: async () => {
-                    await new Promise((r) => setTimeout(r, IN_MOTION_TRIGGER_DELAY_MS));
+                    await new Promise((r) => setTimeout(r, 30));
                     // Вместо нужного уровня лифт врезался в верхний аварийный концевик
                     emu.triggerTopTamper();
                 },
             });
 
             await assert.rejects(
-                () => lift.ElevateToLevel(TARGET_LEVEL_5),
+                () => lift.ElevateToLevel(5),
                 (fault) => fault.code === FAULTS.LEVEL_SENSOR_FAIL
             );
 
@@ -365,12 +381,12 @@ describe('ClassSpiralSectionLift — управление актуаторами
         it('Abort() во время подъема останавливает мотор и возвращает автомат лифта в состояние IDLE', async () => {
             emu.attachMotorBehavior({
                 onStartMove: async () => {
-                    await new Promise((r) => setTimeout(r, IN_MOTION_TRIGGER_DELAY_MS));
+                    await new Promise((r) => setTimeout(r, 30));
                     lift.Abort();
                 },
             });
 
-            await lift.ElevateToLevel(START_LEVEL_4);
+            await lift.ElevateToLevel(4);
 
             assert.equal(lift.State, ClassSpiralSectionLift.STATE.IDLE);
             assert.equal(stub.getLastSentValue(channels.liftMotorCtrl2), 'STOP');

@@ -8,14 +8,12 @@ const { CELL_ACTION } = require('../../../../srvStatesController/ts/ISpiralSecti
 const { ProxyChannelStub } = require('../../helpers/ProxyChannelStub');
 const { SpiralSection } = require('../../../js/Emu');
 
-// --- Константы, отражающие внутренние параметры ClassSpiralSectionStorage (не вынесенные в SpiralSectionConstants) ---
+// --- Параметры аппаратного протокола коммутации матрицы ---
 const TIME_BETWEEN_STEPS_MS = 300;
-const PSU_OFF_VAL = 0;
-const PSU_ON_VAL = 1;
 const MOTOR_STEP_GND = 1;
 const MOTOR_STEP_VPLUS = 2;
 
-// --- Константы тестовой фикстуры и таймингов сценариев ---
+// --- Константы тестовой конфигурации матрицы и таймингов ---
 const ROWS = 4;
 const COLS = 3;
 const BUS_NUMBER = 1;
@@ -24,15 +22,9 @@ const BG_MOTOR_OFF_SETTLE_MS = TIME_BETWEEN_STEPS_MS + 20; // 320 мс — ож�
 const MANUAL_FIRST_PULSE_DELAY_MS = TIME_BETWEEN_STEPS_MS + 40; // 340 мс — сразу после выхода из MotorOnPhased
 const POST_DEBOUNCE_WAIT_MS = STORAGE_CONSTANSTS.TAMPER_DEBOUNCE + 20; // 520 мс — гарантированно после TAMPER_DEBOUNCE (500 мс)
 
-const DISPENSE_QTY_SINGLE = 1;
-const DISPENSE_QTY_MULTI = 3;
 const BETWEEN_PULSES_MS = 40;
 const ABORT_BETWEEN_PULSES_MS = 60;
 const TAMPER_PULSE_WIDTH_MS = 10;
-
-const SHORT_RUN_MOTOR_DURATION_MS = 50;
-const TIMED_RUN_MOTOR_DURATION_MS = 650;
-const RESET_DURING_DISPENSE_DELAY_MS = 100;
 
 describe('ClassSpiralSectionStorage — управление актуаторами матрицы, проверка стартового положения и выдача оборотами (Hardware)', () => {
     let stub;
@@ -115,11 +107,11 @@ describe('ClassSpiralSectionStorage — управление актуатора�
     describe('Низкоуровневые команды актуаторов: OffPSU(), OnPSU(), MotorStep(), MotorOffAll()', () => {
         it('OffPSU() записывает 0 в канал psuWork, а OnPSU() записывает 1', () => {
             storage.OffPSU();
-            assert.equal(stub.getLastSentValue(channels.psuWork), PSU_OFF_VAL);
+            assert.equal(stub.getLastSentValue(channels.psuWork), 0);
 
             storage.OnPSU();
-            assert.equal(stub.getLastSentValue(channels.psuWork), PSU_ON_VAL);
-            assert.deepEqual(stub.getSentValues(channels.psuWork), [PSU_OFF_VAL, PSU_ON_VAL]);
+            assert.equal(stub.getLastSentValue(channels.psuWork), 1);
+            assert.deepEqual(stub.getSentValues(channels.psuWork), [0, 1]);
         });
 
         it('MotorStep() отправляет команду в matrixCtrlChannel и разрешается при получении подтверждения от драйвера', async () => {
@@ -177,7 +169,7 @@ describe('ClassSpiralSectionStorage — управление актуатора�
             await storage.RunMotor({
                 row: 1,
                 column: 2,
-                duration: SHORT_RUN_MOTOR_DURATION_MS,
+                duration: 50,
             });
 
             const sent = stub.getSentValues(channels.matrixCtrlChannel);
@@ -188,6 +180,24 @@ describe('ClassSpiralSectionStorage — управление актуатора�
                 { target: targetInd, cmd: 'Off', args: [{ step: MOTOR_STEP_GND }] },
                 { target: targetInd, cmd: 'Off', args: [{ step: MOTOR_STEP_VPLUS }] },
             ]);
+        });
+
+        it('MotorOnPhased() успешно включается при кратковременном пусковом броске тока на Step 2 (V+), спадающем до рабочего значения к концу фазирования', async () => {
+            // При подаче Step 2 (V+) моделируем пусковой бросок (1.6A - КЗ), который через 80 мс спадает до нормального рабочего тока (0.20A)
+            stub.onSet(channels.matrixCtrlChannel, (payload) => {
+                if (payload.cmd === 'On' && payload.args?.[0]?.step === MOTOR_STEP_VPLUS) {
+                    emu.pulseCurrent(emu.CURR.short, 80, emu.CURR.workOk);
+                }
+            });
+
+            await storage.RunMotor({
+                row: 1,
+                column: 2,
+                duration: 50,
+            });
+
+            assert.equal(storage.State, ClassSpiralSectionStorage.STATE.IDLE);
+            assert.equal(sectionState.Cells[5].Status, SPIRAL_CELL_STATE.OK);
         });
 
         it('MotorOff() выполняет двухшаговое отключение (step 1 GND -> контроль падения тока -> step 2 V+)', async () => {
@@ -292,7 +302,7 @@ describe('ClassSpiralSectionStorage — управление актуатора�
     // =========================================================================
     describe('Вращение спирали на заданное количество оборотов: Dispense({ row, column, quantity })', () => {
         it('выполняет выдачу 1 ед. ТМЦ: фазно включает мотор, ждет импульс тампера после TAMPER_DEBOUNCE, эмитит событие "dispense" и выключает мотор', async () => {
-            const order = { row: 2, column: 1, quantity: DISPENSE_QTY_SINGLE };
+            const order = { row: 2, column: 1, quantity: 1 };
             const targetInd = storage.PosToInd(order); // index = 7
 
             const dispensedEvents = [];
@@ -300,7 +310,7 @@ describe('ClassSpiralSectionStorage — управление актуатора�
 
             emu.simulateRotations({
                 cols: COLS,
-                rotationsCount: DISPENSE_QTY_SINGLE,
+                rotationsCount: 1,
             });
 
             await storage.Dispense(order);
@@ -309,13 +319,13 @@ describe('ClassSpiralSectionStorage — управление актуатора�
             assert.deepEqual(dispensedEvents, [order]);
             assert.deepEqual(stub.getLastSentValue(channels.monSpirals), {
                 Cell: targetInd,
-                Rots: DISPENSE_QTY_SINGLE,
+                Rots: 1,
             });
             assert.equal(sectionState.Cells[targetInd].Action, CELL_ACTION.ACTION);
         });
 
         it('выполняет выдачу нескольких единиц ТМЦ подряд (quantity = 3), отсчитывая ровно 3 срабатывания тампера перед выключением мотора', async () => {
-            const order = { row: 0, column: 2, quantity: DISPENSE_QTY_MULTI };
+            const order = { row: 0, column: 2, quantity: 3 };
             const targetInd = storage.PosToInd(order); // index = 2
 
             const dispensedEvents = [];
@@ -323,31 +333,31 @@ describe('ClassSpiralSectionStorage — управление актуатора�
 
             emu.simulateRotations({
                 cols: COLS,
-                rotationsCount: DISPENSE_QTY_MULTI,
+                rotationsCount: 3,
                 betweenPulsesMs: BETWEEN_PULSES_MS,
             });
 
             await storage.Dispense(order);
 
-            assert.equal(dispensedEvents.length, DISPENSE_QTY_MULTI);
+            assert.equal(dispensedEvents.length, 3);
             assert.deepEqual(stub.getLastSentValue(channels.monSpirals), {
                 Cell: targetInd,
-                Rots: DISPENSE_QTY_MULTI,
+                Rots: 3,
             });
 
             const unit = [...storage.UnitsByScope(targetInd, 'single')][0];
-            assert.equal(unit.itemsDispensed, DISPENSE_QTY_MULTI);
+            assert.equal(unit.itemsDispensed, 3);
             assert.equal(storage.State, ClassSpiralSectionStorage.STATE.IDLE);
         });
 
         it('в ручном режиме (manual = true) принимает сигнал тампера без задержки TAMPER_DEBOUNCE и не блокирует старт при разомкнутом тампере', async () => {
-            const order = { row: 3, column: 0, quantity: DISPENSE_QTY_SINGLE };
+            const order = { row: 3, column: 0, quantity: 1 };
             // Даже если изначально тампер был в TAMPER_OFF, в manual-режиме MotorOnPhased не бросает TAMPER_BAD_POS
             emu.setRowTamper(order.row, false);
 
             emu.simulateRotations({
                 cols: COLS,
-                rotationsCount: DISPENSE_QTY_SINGLE,
+                rotationsCount: 1,
                 firstPulseDelayMs: MANUAL_FIRST_PULSE_DELAY_MS,
             });
 
@@ -356,12 +366,12 @@ describe('ClassSpiralSectionStorage — управление актуатора�
             assert.equal(storage.State, ClassSpiralSectionStorage.STATE.IDLE);
             assert.deepEqual(stub.getLastSentValue(channels.monSpirals), {
                 Cell: storage.PosToInd(order),
-                Rots: DISPENSE_QTY_SINGLE,
+                Rots: 1,
             });
         });
 
         it('игнорирует ложный дребезг тампера в автоматическом режиме, если импульс пришел раньше TAMPER_DEBOUNCE (500 мс)', async () => {
-            const order = { row: 1, column: 1, quantity: DISPENSE_QTY_SINGLE };
+            const order = { row: 1, column: 1, quantity: 1 };
             const dispensedEvents = [];
             storage.Events.on('dispense', (e) => dispensedEvents.push(e));
 
@@ -380,11 +390,11 @@ describe('ClassSpiralSectionStorage — управление актуатора�
 
             await storage.Dispense(order, false);
 
-            assert.equal(dispensedEvents.length, DISPENSE_QTY_SINGLE);
+            assert.equal(dispensedEvents.length, 1);
         });
 
         it('диагностирует FAULTS.ACTUATOR_NO_POWER на Step 2 включения мотора, переводит ячейку в ACTUATOR_NO_POWER и эмитит событие "fail"', async () => {
-            const order = { row: 2, column: 2, quantity: DISPENSE_QTY_SINGLE };
+            const order = { row: 2, column: 2, quantity: 1 };
             const targetInd = storage.PosToInd(order);
 
             const failEvents = [];
@@ -409,7 +419,7 @@ describe('ClassSpiralSectionStorage — управление актуатора�
         });
 
         it('прерывает многократную выдачу после текущего оборота при вызове Abort()', async () => {
-            const order = { row: 0, column: 0, quantity: DISPENSE_QTY_MULTI };
+            const order = { row: 0, column: 0, quantity: 3 };
             const dispensedEvents = [];
 
             storage.Events.on('dispense', (e) => {
@@ -420,14 +430,14 @@ describe('ClassSpiralSectionStorage — управление актуатора�
 
             emu.simulateRotations({
                 cols: COLS,
-                rotationsCount: DISPENSE_QTY_MULTI,
+                rotationsCount: 3,
                 betweenPulsesMs: ABORT_BETWEEN_PULSES_MS,
             });
 
             await storage.Dispense(order);
 
             // Выдача должна завершиться сразу после 1-го оборота, не дожидаясь остальных двух
-            assert.equal(dispensedEvents.length, DISPENSE_QTY_SINGLE);
+            assert.equal(dispensedEvents.length, 1);
             assert.equal(storage.State, ClassSpiralSectionStorage.STATE.IDLE);
         });
     });
@@ -440,7 +450,7 @@ describe('ClassSpiralSectionStorage — управление актуатора�
             await storage.RunMotor({
                 row: 1,
                 column: 0,
-                duration: TIMED_RUN_MOTOR_DURATION_MS,
+                duration: 650,
             });
 
             assert.equal(storage.State, ClassSpiralSectionStorage.STATE.IDLE);
@@ -461,9 +471,9 @@ describe('ClassSpiralSectionStorage — управление актуатора�
             const pendingDispense = storage.Dispense({
                 row: 0,
                 column: 1,
-                quantity: DISPENSE_QTY_SINGLE,
+                quantity: 1,
             });
-            await new Promise((r) => setTimeout(r, RESET_DURING_DISPENSE_DELAY_MS));
+            await new Promise((r) => setTimeout(r, 100));
 
             storage.Reset();
 
