@@ -4,44 +4,8 @@
   "description": "JSON Schema для базового мониторинга секции (BaseSectionMonitoring)",
   "type": "object",
   "properties": {
-    "Name": {
-      "type": "string",
-      "description": "Имя секции (например, 'spiral', 'postomat')"
-    },
     "Uptime": {
-      "$ref": "#/definitions/ItemUptimeMonitoring"
-    },
-    "Rows": {
-      "type": "array",
-      "description": "Массив наработки строк (полок) секции",
-      "items": {
-        "type": "object",
-        "properties": {
-          "Uptime": {
-            "$ref": "#/definitions/ItemUptimeMonitoring"
-          }
-        },
-        "required": [
-          "Uptime"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "Cols": {
-      "type": "array",
-      "description": "Массив наработки столбцов секции",
-      "items": {
-        "type": "object",
-        "properties": {
-          "Uptime": {
-            "$ref": "#/definitions/ItemUptimeMonitoring"
-          }
-        },
-        "required": [
-          "Uptime"
-        ],
-        "additionalProperties": false
-      }
+      "$ref": "#/definitions/SectionUptimeMonitoring"
     },
     "Cells": {
       "type": "array",
@@ -50,7 +14,7 @@
         "type": "object",
         "properties": {
           "Uptime": {
-            "$ref": "#/definitions/ItemUptimeMonitoring"
+            "$ref": "#/definitions/CellUptimeMonitoring"
           }
         },
         "required": [
@@ -77,33 +41,67 @@
     }
   },
   "required": [
-    "Name",
     "Uptime",
     "Cells"
   ],
   "definitions": {
-    "ItemUptimeMonitoring": {
-      "title": "ItemUptimeMonitoring",
-      "description": "Показатели наработки конструктивного элемента (часы, циклы, типовой моторесурс)",
+    "SectionUptimeMonitoring": {
+      "title": "SectionUptimeMonitoring",
+      "description": "Показатели наработки подсветки секции",
       "type": "object",
       "properties": {
-        "Hours": {
+        "Light": {
           "type": "number",
-          "description": "Наработка, часов"
+          "description": "Время работы подсветки секции, часов"
         },
-        "Cycles": {
+        "LightMax": {
           "type": "number",
-          "description": "Наработка, циклов"
-        },
-        "Nominal": {
-          "type": "number",
-          "description": "Типовая наработка (номинальный моторесурс)"
+          "description": "Максимальное время работы подсветки секции до замены, часов"
         }
       },
       "required": [
-        "Hours",
-        "Cycles",
-        "Nominal"
+        "Light",
+        "LightMax"
+      ],
+      "additionalProperties": false
+    },
+    "CellUptimeMonitoring": {
+      "title": "CellUptimeMonitoring",
+      "description": "Показатели наработки ячейки секции",
+      "type": "object",
+      "properties": {
+        "Cell": {
+          "type": "number",
+          "description": "Наработка ячейки (замка для постаматной, моторчика для спиральной), операций"
+        },
+        "CellMax": {
+          "type": "number",
+          "description": "Максимальная наработка ячейки до замены, операций"
+        },
+        "Door": {
+          "type": "number",
+          "description": "Количество открытий дверки постаматной ячейки, операций"
+        },
+        "DoorMax": {
+          "type": "number",
+          "description": "Максимальное количество открытий дверки постаматной ячейки до замены, операций"
+        },
+        "Light": {
+          "type": "number",
+          "description": "Время работы подсветки ячейки, часов"
+        },
+        "LightMax": {
+          "type": "number",
+          "description": "Максимальное время работы подсветки ячейки до замены, часов"
+        }
+      },
+      "required": [
+        "Cell",
+        "CellMax",
+        "Door",
+        "DoorMax",
+        "Light",
+        "LightMax"
       ],
       "additionalProperties": false
     },
@@ -116,14 +114,14 @@
           "type": "number",
           "description": "Наработка, часов"
         },
-        "Nominal": {
+        "HoursMax": {
           "type": "number",
-          "description": "Типичная наработка (номинальный моторесурс)"
+          "description": "Типичная наработка до замены, часов"
         }
       },
       "required": [
         "Hours",
-        "Nominal"
+        "HoursMax"
       ],
       "additionalProperties": false
     }

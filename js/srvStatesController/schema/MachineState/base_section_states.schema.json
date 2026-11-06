@@ -50,8 +50,6 @@
     }
   },
   "required": [
-    "IsAvailable",
-    "Door",
     "Action",
     "Status",
     "Rows",
@@ -83,10 +81,10 @@
     },
     "SECTION_STATUS": {
       "title": "SECTION_STATUS",
-      "description": "Статус готовности секции к командам ВУ (IDLE - ожидание команды ВУ, COMMAND - выполнение команды, BLOCKED - выполнение команд ВУ заблокировано)",
+      "description": "Статус секции (OK - штатно, ERROR - секция работает с ошибками, BLOCKED - секция недоступна, а также IDLE/DISPENSE/DELIVERY/LOADING для обратной совместимости)",
       "type": "string",
-      "enum": ["IDLE", "COMMAND", "BLOCKED"],
-      "tsEnumNames": ["IDLE", "COMMAND", "BLOCKED"]
+      "enum": ["OK", "ERROR", "BLOCKED", "IDLE", "DISPENSE", "DELIVERY", "LOADING"],
+      "tsEnumNames": ["OK", "ERROR", "BLOCKED", "IDLE", "DISPENSE", "DELIVERY", "LOADING"]
     },
     "COMMAND_STATE": {
       "title": "COMMAND_STATE",

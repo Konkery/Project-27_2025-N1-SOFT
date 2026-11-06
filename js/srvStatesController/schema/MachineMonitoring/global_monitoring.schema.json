@@ -9,8 +9,23 @@
       "description": "Глобальные переменные мониторинга аппарата",
       "properties": {
         "Uptime": {
-          "type": "number",
-          "description": "Наработка аппарата, часов"
+          "type": "object",
+          "description": "Показатели наработки аппарата",
+          "properties": {
+            "Hours": {
+              "type": "number",
+              "description": "Наработка аппарата, часов"
+            },
+            "PowerOn": {
+              "type": "number",
+              "description": "Количество включений аппарата"
+            }
+          },
+          "required": [
+            "Hours",
+            "PowerOn"
+          ],
+          "additionalProperties": false
         },
         "Power": {
           "type": "object",
@@ -37,15 +52,15 @@
           "properties": {
             "Day": {
               "type": "number",
-              "description": "Потреблённая активная энергия за текущие сутки, кВт*ч"
+              "description": "Потреблённая активная энергия за текущие сутки, Вт·ч"
             },
             "Week": {
               "type": "number",
-              "description": "Потреблённая активная энергия за неделю, кВт*ч"
+              "description": "Потреблённая активная энергия за неделю, Вт·ч"
             },
             "Month": {
               "type": "number",
-              "description": "Потреблённая активная энергия за месяц, кВт*ч"
+              "description": "Потреблённая активная энергия за месяц, Вт·ч"
             }
           },
           "required": [
@@ -83,6 +98,67 @@
       ],
       "additionalProperties": false
     },
+    "Hub": {
+      "type": "object",
+      "description": "Переменные мониторинга хабов",
+      "properties": {
+        "Low": {
+          "type": "object",
+          "description": "Хаб нижнего уровня (НУ)",
+          "properties": {
+            "Temp": {
+              "type": "number",
+              "description": "Текущая температура CPU хаба НУ, °C"
+            }
+          },
+          "required": [
+            "Temp"
+          ],
+          "additionalProperties": false
+        },
+        "Mid": {
+          "type": "object",
+          "description": "Хаб среднего уровня (СУ)",
+          "properties": {
+            "Temp": {
+              "type": "number",
+              "description": "Текущая температура CPU хаба СУ, °C"
+            }
+          },
+          "required": [
+            "Temp"
+          ],
+          "additionalProperties": false
+        },
+        "Hi": {
+          "type": "object",
+          "description": "Хаб верхнего уровня (ВУ)",
+          "properties": {
+            "Temp": {
+              "type": "number",
+              "description": "Текущая температура CPU хаба ВУ, °C"
+            }
+          },
+          "required": [
+            "Temp"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "Low",
+        "Mid",
+        "Hi"
+      ],
+      "additionalProperties": false
+    },
+    "UPS": {
+      "type": "array",
+      "description": "Переменные измерений и наработки резервированных источников питания (ИБП)",
+      "items": {
+        "$ref": "#/definitions/UpsMonitoring"
+      }
+    },
     "Bus": {
       "type": "array",
       "description": "Переменные измерений шин электропитания",
@@ -114,6 +190,8 @@
   },
   "required": [
     "Global",
+    "Hub",
+    "UPS",
     "Bus",
     "PSU",
     "Sections"
@@ -140,6 +218,104 @@
       ],
       "additionalProperties": false
     },
+    "UpsBatteryUptimeMonitoring": {
+      "title": "UpsBatteryUptimeMonitoring",
+      "description": "Показатели наработки аккумулятора ИБП",
+      "type": "object",
+      "properties": {
+        "Hours": {
+          "type": "number",
+          "description": "Общее время эксплуатации аккумулятора, часов"
+        },
+        "HoursMax": {
+          "type": "number",
+          "description": "Максимальное время эксплуатации аккумулятора до замены, часов"
+        },
+        "NumTransfers": {
+          "type": "number",
+          "description": "Количество переходов на питание аппарата от аккумулятора"
+        },
+        "RuntimeTotal": {
+          "type": "number",
+          "description": "Общее время работы аппарата от аккумулятора, часов"
+        }
+      },
+      "required": [
+        "Hours",
+        "HoursMax",
+        "NumTransfers",
+        "RuntimeTotal"
+      ],
+      "additionalProperties": false
+    },
+    "UpsUptimeMonitoring": {
+      "title": "UpsUptimeMonitoring",
+      "description": "Показатели наработки ИБП",
+      "type": "object",
+      "properties": {
+        "Hours": {
+          "type": "number",
+          "description": "Наработка, часов"
+        },
+        "HoursMax": {
+          "type": "number",
+          "description": "Моторесурс работы ИП в штатном режиме, часов"
+        },
+        "OVCcount": {
+          "type": "number",
+          "description": "Наработка в перегрузке по току, часов"
+        },
+        "OVTcount": {
+          "type": "number",
+          "description": "Наработка в перегреве, часов"
+        },
+        "Battery": {
+          "$ref": "#/definitions/UpsBatteryUptimeMonitoring"
+        }
+      },
+      "required": [
+        "Hours",
+        "HoursMax",
+        "OVCcount",
+        "OVTcount",
+        "Battery"
+      ],
+      "additionalProperties": false
+    },
+    "UpsMonitoring": {
+      "title": "UpsMonitoring",
+      "description": "Переменные измерений и наработки резервированного источника питания (ИБП)",
+      "type": "object",
+      "properties": {
+        "VoltageIn": {
+          "type": "number",
+          "description": "Числовое значение входного напряжения, В"
+        },
+        "VoltageOut": {
+          "type": "number",
+          "description": "Числовое значение выходного напряжения, В"
+        },
+        "CurrentOut": {
+          "type": "number",
+          "description": "Числовое значение выходного тока, А"
+        },
+        "Temp": {
+          "type": "number",
+          "description": "Числовое значение температуры ИП, °C"
+        },
+        "Uptime": {
+          "$ref": "#/definitions/UpsUptimeMonitoring"
+        }
+      },
+      "required": [
+        "VoltageIn",
+        "VoltageOut",
+        "CurrentOut",
+        "Temp",
+        "Uptime"
+      ],
+      "additionalProperties": false
+    },
     "PsuUptimeMonitoring": {
       "title": "PsuUptimeMonitoring",
       "description": "Показатели наработки источника питания (ИП)",
@@ -149,22 +325,22 @@
           "type": "number",
           "description": "Наработка ИП, часов"
         },
-        "Nominal": {
+        "HoursMax": {
           "type": "number",
           "description": "Моторесурс работы ИП в штатном режиме, часов"
         },
         "OVCcount": {
           "type": "number",
-          "description": "Наработка в режиме перегрузки по току"
+          "description": "Наработка в режиме перегрузки по току, часов"
         },
         "OVTcount": {
           "type": "number",
-          "description": "Наработка в режиме перегреве"
+          "description": "Наработка в режиме перегрева, часов"
         }
       },
       "required": [
         "Hours",
-        "Nominal",
+        "HoursMax",
         "OVCcount",
         "OVTcount"
       ],

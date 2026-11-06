@@ -4,31 +4,11 @@
   "description": "JSON Schema для глобального дерева состояний вендингового аппарата (States)",
   "type": "object",
   "properties": {
-    "Name": {
-      "type": "string",
-      "description": "Уникальное имя вендингового аппарата"
+    "Global": {
+      "$ref": "#/definitions/GlobalMachineState"
     },
-    "StartDate": {
-      "type": "string",
-      "description": "Дата и время введения аппарата в эксплуатацию"
-    },
-    "Command": {
-      "$ref": "./base_section_states.schema.json#/definitions/COMMAND_STATE"
-    },
-    "Status": {
-      "$ref": "#/definitions/MACHINE_STATUS"
-    },
-    "Mode": {
-      "$ref": "#/definitions/GLOBAL_MACHINE_STATE"
-    },
-    "Resource": {
-      "$ref": "#/definitions/RESOURCE_STATE"
-    },
-    "Mains": {
-      "$ref": "#/definitions/MainsState"
-    },
-    "Env": {
-      "$ref": "#/definitions/EnvState"
+    "Hub": {
+      "$ref": "#/definitions/HubState"
     },
     "Bus": {
       "type": "array",
@@ -37,8 +17,12 @@
         "$ref": "#/definitions/BusState"
       }
     },
-    "Net": {
-      "$ref": "#/definitions/NetState"
+    "UPS": {
+      "type": "array",
+      "description": "Список флагов состояния источников бесперебойного питания (ИБП)",
+      "items": {
+        "$ref": "#/definitions/UpsState"
+      }
     },
     "PSU": {
       "type": "array",
@@ -56,21 +40,29 @@
           { "$ref": "./base_section_states.schema.json" }
         ]
       }
+    },
+    "Net": {
+      "$ref": "#/definitions/NetState"
     }
   },
   "required": [
-    "Name",
-    "StartDate",
-    "Status",
-    "Mode",
-    "Mains",
-    "Env",
-    "Net",
+    "Global",
+    "Hub",
+    "Bus",
+    "UPS",
     "PSU",
-    "Sections"
+    "Sections",
+    "Net"
   ],
   "additionalProperties": false,
   "definitions": {
+    "GLOBAL_ACTION": {
+      "title": "GLOBAL_ACTION",
+      "description": "Флаги действия аппарата в целом (IDLE - ожидание команды ВУ, COMMAND - выполнение команды выдачи, BLOCKED - выполнение команд ВУ заблокировано)",
+      "type": "string",
+      "enum": ["IDLE", "COMMAND", "BLOCKED"],
+      "tsEnumNames": ["IDLE", "COMMAND", "BLOCKED"]
+    },
     "MACHINE_STATUS": {
       "title": "MACHINE_STATUS",
       "description": "Глобальный статус работоспособности аппарата (OK - штатный режим, WARNING - режим частичной работоспособности, ERROR - нештатный режим)",
@@ -80,10 +72,10 @@
     },
     "GLOBAL_MACHINE_STATE": {
       "title": "GLOBAL_MACHINE_STATE",
-      "description": "Глобальные режимы работы аппарата (OK - штатный режим, SERVICE - техническое обслуживание, DEPLOY - обновление прошивки, RESTART - режим перезапуска, STOP - режим останова)",
+      "description": "Глобальные режимы работы аппарата (RUNNING - штатный режим, SERVICE - техническое обслуживание, DEPLOY - обновление прошивки, RESTART - режим перезапуска, STOP - режим останова)",
       "type": "string",
-      "enum": ["OK", "SERVICE", "DEPLOY", "RESTART", "STOP"],
-      "tsEnumNames": ["OK", "SERVICE", "DEPLOY", "RESTART", "STOP"]
+      "enum": ["RUNNING", "SERVICE", "DEPLOY", "RESTART", "STOP"],
+      "tsEnumNames": ["RUNNING", "SERVICE", "DEPLOY", "RESTART", "STOP"]
     },
     "RESOURCE_STATE": {
       "title": "RESOURCE_STATE",
@@ -113,18 +105,6 @@
       "enum": ["YES", "NO"],
       "tsEnumNames": ["YES", "NO"]
     },
-    "MainsState": {
-      "title": "MainsState",
-      "description": "Флаги состояния электропитания сети",
-      "type": "object",
-      "properties": {
-        "Voltage": {
-          "$ref": "#/definitions/MEAS_STATE"
-        }
-      },
-      "required": ["Voltage"],
-      "additionalProperties": false
-    },
     "EnvState": {
       "title": "EnvState",
       "description": "Флаги состояния датчиков окружающей среды",
@@ -140,6 +120,86 @@
       "required": ["Temp", "Hum"],
       "additionalProperties": false
     },
+    "GlobalMachineState": {
+      "title": "GlobalMachineState",
+      "description": "Глобальные флаги состояния аппарата в целом",
+      "type": "object",
+      "properties": {
+        "Name": {
+          "type": "string",
+          "description": "Уникальное имя вендингового аппарата"
+        },
+        "StartDate": {
+          "type": "string",
+          "description": "Дата и время введения аппарата в эксплуатацию"
+        },
+        "Action": {
+          "$ref": "#/definitions/GLOBAL_ACTION"
+        },
+        "Status": {
+          "$ref": "#/definitions/MACHINE_STATUS"
+        },
+        "Mode": {
+          "$ref": "#/definitions/GLOBAL_MACHINE_STATE"
+        },
+        "MainsVoltage": {
+          "$ref": "#/definitions/MEAS_STATE"
+        },
+        "Env": {
+          "$ref": "#/definitions/EnvState"
+        },
+        "Resource": {
+          "$ref": "#/definitions/RESOURCE_STATE"
+        }
+      },
+      "required": [
+        "Name",
+        "StartDate",
+        "Action",
+        "Status",
+        "Mode",
+        "MainsVoltage",
+        "Env",
+        "Resource"
+      ],
+      "additionalProperties": false
+    },
+    "HubState": {
+      "title": "HubState",
+      "description": "Флаги состояния микрокомпьютеров (хабов)",
+      "type": "object",
+      "properties": {
+        "Low": {
+          "type": "object",
+          "description": "Хаб нижнего уровня (НУ)",
+          "properties": {
+            "Temp": { "$ref": "#/definitions/MEAS_STATE" }
+          },
+          "required": ["Temp"],
+          "additionalProperties": false
+        },
+        "Mid": {
+          "type": "object",
+          "description": "Хаб среднего уровня (СУ)",
+          "properties": {
+            "Temp": { "$ref": "#/definitions/MEAS_STATE" }
+          },
+          "required": ["Temp"],
+          "additionalProperties": false
+        },
+        "Hi": {
+          "type": "object",
+          "description": "Хаб верхнего уровня (ВУ)",
+          "properties": {
+            "Temp": { "$ref": "#/definitions/MEAS_STATE" }
+          },
+          "required": ["Temp"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["Low", "Mid", "Hi"],
+      "additionalProperties": false
+    },
     "BusState": {
       "title": "BusState",
       "description": "Флаги состояния шины электропитания",
@@ -153,6 +213,44 @@
         }
       },
       "required": ["Voltage", "Current"],
+      "additionalProperties": false
+    },
+    "UpsState": {
+      "title": "UpsState",
+      "description": "Флаги состояния источника бесперебойного питания (ИБП)",
+      "type": "object",
+      "properties": {
+        "VoltageIn": {
+          "$ref": "#/definitions/MEAS_STATE"
+        },
+        "VoltageOut": {
+          "$ref": "#/definitions/MEAS_STATE"
+        },
+        "CurrentOut": {
+          "$ref": "#/definitions/BUS_CURRENT_STATE"
+        },
+        "Temp": {
+          "$ref": "#/definitions/MEAS_STATE"
+        },
+        "ShortCircuit": {
+          "$ref": "#/definitions/AVAILABLE_STATE"
+        },
+        "Enabled": {
+          "$ref": "#/definitions/AVAILABLE_STATE"
+        },
+        "Resource": {
+          "$ref": "#/definitions/AVAILABLE_STATE"
+        }
+      },
+      "required": [
+        "VoltageIn",
+        "VoltageOut",
+        "CurrentOut",
+        "Temp",
+        "ShortCircuit",
+        "Enabled",
+        "Resource"
+      ],
       "additionalProperties": false
     },
     "PsuState": {
@@ -182,7 +280,15 @@
           "$ref": "#/definitions/AVAILABLE_STATE"
         }
       },
-      "required": ["VoltageIn", "VoltageOut", "CurrentOut", "Temp", "ShortCircuit", "Enabled", "Resource"],
+      "required": [
+        "VoltageIn",
+        "VoltageOut",
+        "CurrentOut",
+        "Temp",
+        "ShortCircuit",
+        "Enabled",
+        "Resource"
+      ],
       "additionalProperties": false
     },
     "NET_SUMMARY_STATE": {
@@ -264,7 +370,7 @@
     },
     "NET_DNS_STATE": {
       "title": "NET_DNS_STATE",
-      "description": "Статус службы DNS (OK - в норме, ERR_NO_RESPONSE - нет ответа, ERR_BAD_RESPONSE - некорректный ответ, ERR_MISSING_RECORD - нет записи, ERR_WRONG_RECORD - ошибочная запись, ERR_BAD_RESOLVER - ошибка резолвера, ERR_LOCAL_RESOLVE - ошибка локального разрешения, ERR_EXTERNAL_RESOLVE - ошибка внешнего разрешения, UNKNOWN - нет данных)",
+      "description": "Статус службы разрешение имён DNS (OK - в норме, ERR_NO_RESPONSE - нет ответа, ERR_BAD_RESPONSE - некорректный ответ, ERR_MISSING_RECORD - нет записи, ERR_WRONG_RECORD - ошибочная запись, ERR_BAD_RESOLVER - ошибка резолвера, ERR_LOCAL_RESOLVE - ошибка локального разрешения, ERR_EXTERNAL_RESOLVE - ошибка внешнего разрешения, UNKNOWN - нет данных)",
       "type": "string",
       "enum": ["OK", "ERR_NO_RESPONSE", "ERR_BAD_RESPONSE", "ERR_MISSING_RECORD", "ERR_WRONG_RECORD", "ERR_BAD_RESOLVER", "ERR_LOCAL_RESOLVE", "ERR_EXTERNAL_RESOLVE", "UNKNOWN"],
       "tsEnumNames": ["OK", "ERR_NO_RESPONSE", "ERR_BAD_RESPONSE", "ERR_MISSING_RECORD", "ERR_WRONG_RECORD", "ERR_BAD_RESOLVER", "ERR_LOCAL_RESOLVE", "ERR_EXTERNAL_RESOLVE", "UNKNOWN"]
@@ -320,14 +426,15 @@
           "type": "object",
           "description": "Агрегированные показатели сетевых подсистем",
           "properties": {
-            "Apparatus": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
+            "Machine": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
             "LAN": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
-            "CoreServices": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
+            "WAN": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
+            "Services": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
             "Hubs": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
             "Cameras": { "$ref": "#/definitions/NET_SUMMARY_STATE" },
             "Logging": { "$ref": "#/definitions/NET_SUMMARY_STATE" }
           },
-          "required": ["Apparatus", "LAN", "CoreServices", "Hubs", "Cameras", "Logging"],
+          "required": ["Machine", "LAN", "WAN", "Services", "Hubs", "Cameras", "Logging"],
           "additionalProperties": false
         },
         "Device": {
@@ -336,27 +443,27 @@
           "properties": {
             "Router": { "$ref": "#/definitions/NET_DEVICE_STATE" },
             "SW_PoE": { "$ref": "#/definitions/NET_DEVICE_STATE" },
-            "Hub_Low": { "$ref": "#/definitions/NET_DEVICE_STATE" },
-            "Hub_Mid": { "$ref": "#/definitions/NET_DEVICE_STATE" },
-            "Hub_Hi": { "$ref": "#/definitions/NET_DEVICE_STATE" },
+            "HubLow": { "$ref": "#/definitions/NET_DEVICE_STATE" },
+            "HubMid": { "$ref": "#/definitions/NET_DEVICE_STATE" },
+            "HubHi": { "$ref": "#/definitions/NET_DEVICE_STATE" },
             "Cam1": { "$ref": "#/definitions/NET_DEVICE_STATE" },
             "Cam2": { "$ref": "#/definitions/NET_DEVICE_STATE" }
           },
-          "required": ["Router", "SW_PoE", "Hub_Low", "Hub_Mid", "Hub_Hi", "Cam1", "Cam2"],
+          "required": ["Router", "SW_PoE", "HubLow", "HubMid", "HubHi", "Cam1", "Cam2"],
           "additionalProperties": false
         },
         "Link": {
           "type": "object",
           "description": "Статусы физических линков",
           "properties": {
-            "Router_Hub_Low": { "$ref": "#/definitions/NET_LINK_STATE" },
-            "Router_Hub_Mid": { "$ref": "#/definitions/NET_LINK_STATE" },
-            "Router_Hub_Hi": { "$ref": "#/definitions/NET_LINK_STATE" },
+            "Router_HubLow": { "$ref": "#/definitions/NET_LINK_STATE" },
+            "Router_HubMid": { "$ref": "#/definitions/NET_LINK_STATE" },
+            "Router_HubHi": { "$ref": "#/definitions/NET_LINK_STATE" },
             "Router_SW_PoE": { "$ref": "#/definitions/NET_LINK_STATE" },
             "SW_PoE_Cam1": { "$ref": "#/definitions/NET_LINK_STATE" },
             "SW_PoE_Cam2": { "$ref": "#/definitions/NET_LINK_STATE" }
           },
-          "required": ["Router_Hub_Low", "Router_Hub_Mid", "Router_Hub_Hi", "Router_SW_PoE", "SW_PoE_Cam1", "SW_PoE_Cam2"],
+          "required": ["Router_HubLow", "Router_HubMid", "Router_HubHi", "Router_SW_PoE", "SW_PoE_Cam1", "SW_PoE_Cam2"],
           "additionalProperties": false
         },
         "IP": {
@@ -418,12 +525,12 @@
           "description": "Состояния службы времени NTP",
           "properties": {
             "Server": { "$ref": "#/definitions/NET_NTP_STATE" },
-            "Hub_Low": { "$ref": "#/definitions/NET_NTP_STATE" },
-            "Hub_Mid": { "$ref": "#/definitions/NET_NTP_STATE" },
-            "Hub_Hi": { "$ref": "#/definitions/NET_NTP_STATE" },
+            "HubLow": { "$ref": "#/definitions/NET_NTP_STATE" },
+            "HubMid": { "$ref": "#/definitions/NET_NTP_STATE" },
+            "HubHi": { "$ref": "#/definitions/NET_NTP_STATE" },
             "Cameras": { "$ref": "#/definitions/NET_NTP_STATE" }
           },
-          "required": ["Server", "Hub_Low", "Hub_Mid", "Hub_Hi", "Cameras"],
+          "required": ["Server", "HubLow", "HubMid", "HubHi", "Cameras"],
           "additionalProperties": false
         },
         "DNS": {
@@ -470,11 +577,11 @@
           "type": "object",
           "description": "Состояние службы Node-RED на хабах",
           "properties": {
-            "Hub_Low": { "$ref": "#/definitions/NET_NODERED_STATE" },
-            "Hub_Mid": { "$ref": "#/definitions/NET_NODERED_STATE" },
-            "Hub_Hi": { "$ref": "#/definitions/NET_NODERED_STATE" }
+            "HubLow": { "$ref": "#/definitions/NET_NODERED_STATE" },
+            "HubMid": { "$ref": "#/definitions/NET_NODERED_STATE" },
+            "HubHi": { "$ref": "#/definitions/NET_NODERED_STATE" }
           },
-          "required": ["Hub_Low", "Hub_Mid", "Hub_Hi"],
+          "required": ["HubLow", "HubMid", "HubHi"],
           "additionalProperties": false
         },
         "Graylog": {
