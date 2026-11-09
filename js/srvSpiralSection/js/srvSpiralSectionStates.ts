@@ -1,31 +1,57 @@
 import { BaseSectionState, ISectionParams } from "../../srvStatesController/js/srvBaseSectionState";
-import { CELL_STATE } from "../../srvStatesController/ts/IBaseSectionStates";
+import { CELL_STATE, AVAILABLE_STATE } from "../../srvStatesController/ts/IBaseSectionStates";
 import {
     SPIRAL_CELL_STATE,
     LIFT_STATE,
+    LIFT_ACTION,
+    DELIVERY_BOX_STATUS,
+    DELIVERY_BOX_ACTION,
     DELIVERY_BOX_STATE,
+    LiftState,
+    DeliveryBoxState,
 } from "../../srvStatesController/ts/ISpiralSectionStates";
 
 export {
     SPIRAL_CELL_STATE,
     LIFT_STATE,
+    LIFT_ACTION,
+    DELIVERY_BOX_STATUS,
+    DELIVERY_BOX_ACTION,
     DELIVERY_BOX_STATE,
+    LiftState,
+    DeliveryBoxState,
 };
 
 export class SpiralSectionState extends BaseSectionState<SPIRAL_CELL_STATE | CELL_STATE> {
-    public Lift: LIFT_STATE;
-    public DeliveryBox: DELIVERY_BOX_STATE;
+    public Lift: LiftState;
+    public DeliveryBox: DeliveryBoxState;
 
     constructor(config: ISectionParams) {
         super(config);
-        this.Lift = LIFT_STATE.OK;
-        this.DeliveryBox = DELIVERY_BOX_STATE.CLOSED;
+        this.Lift = {
+            Status: LIFT_STATE.OK,
+            Action: LIFT_ACTION.IDLE,
+            Resource: AVAILABLE_STATE.YES,
+        };
+        this.DeliveryBox = {
+            Status: DELIVERY_BOX_STATUS.OK,
+            Action: DELIVERY_BOX_ACTION.CLOSED,
+            Resource: AVAILABLE_STATE.YES,
+        };
     }
 
     public override Reset(): void {
         super.Reset();
-        this.Lift = LIFT_STATE.OK;
-        this.DeliveryBox = DELIVERY_BOX_STATE.CLOSED;
+        this.Lift = {
+            Status: LIFT_STATE.OK,
+            Action: LIFT_ACTION.IDLE,
+            Resource: AVAILABLE_STATE.YES,
+        };
+        this.DeliveryBox = {
+            Status: DELIVERY_BOX_STATUS.OK,
+            Action: DELIVERY_BOX_ACTION.CLOSED,
+            Resource: AVAILABLE_STATE.YES,
+        };
     }
 }
 

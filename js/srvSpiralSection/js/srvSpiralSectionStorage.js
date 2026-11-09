@@ -2,10 +2,7 @@ const { EventEmitter2 } = require("eventemitter2");
 const { createTimer, isWithinTolerance, ClassFault } = require("./srvUtils");
 const { ClassFSM: FSM } = require("./srvFSM");
 const { STORAGE_CONSTANSTS, FAULTS, U_TRANSACTIONS, COMMON_CONSTANTS } = require("./SpiralSectionConstants");
-const { default: SpiralSectionState, } = require("./srvSpiralSectionStates");
-const { SPIRAL_CELL_STATE, CELL_ACTION } = require("../../srvStatesController/ts/ISpiralSectionStates");
-const { default: StatesController } = require("../../srvStatesController/js/srvSectionStateController");
-const STATUS_EXCEPT = [SPIRAL_CELL_STATE.ACTUATOR_NO_POWER, SPIRAL_CELL_STATE.ACTUATOR_SHORT_CIRCUIT, SPIRAL_CELL_STATE.ERR_TAMPER];
+const { SpiralStateAdapter } = require("./srvSpiralStateAdapter");
 const ClassBuffer = require('../../../../HorizonServer/js/srvUtils/js/buffer');
 
 const MOTOR_RES_MAX_TIME = 1000;
@@ -36,8 +33,8 @@ class ClassSpiralSectionStorage {
     #_Channels = null;
     /** @type {StatesController} */
     #_GlobalState = null;
-    /** @type {SpiralSectionState} */
-    #_SectionState = null;
+    /** @type {SpiralStateAdapter} */
+    #_StateAdapter = null;
     /** @type {import("./srvSpiralSectionStorage").TypeSpiralSectionContext} */
     #_Context = {};
     /**@type {EventEmitter2} */
@@ -81,13 +78,13 @@ class ClassSpiralSectionStorage {
      * @param {SpiralSectionState} param0.sectionState
      * @param {import("./srvSpiralSection").TypeProxyLogger} param0.ProxyLogger
      */
-    constructor({ ProxyCh, channels, advOpts, sectionState, ProxyLogger }) {
+    constructor({ ProxyCh, channels, advOpts, sectionState, stateAdapter, ProxyLogger }) {
         this.#_ProxyCh = ProxyCh;
         /** @type {import("./srvSpiralSectionStorage").ClassSpiralSectionStorage['_ProxyLogger']} */
         this._ProxyLogger = ProxyLogger;
         this.#_Channels = channels;
         this.#_GlobalState = advOpts.globalState;
-        this.#_SectionState = sectionState;
+        this.#_StateAdapter = stateAdapter ?? (advOpts?.stateAdapter ?? new SpiralStateAdapter(sectionState));
         /** @type {import("./srvSpiralSectionStorage").ClassSpiralSectionStorage['_BusNumber']} */
         this._BusNumber = advOpts.busNumber;
         let { rows, cols } = advOpts.size;
@@ -103,7 +100,7 @@ class ClassSpiralSectionStorage {
                 itemsLeft: 999,
                 capacity: 999,
                 itemsDispensed: 0,
-                status: SPIRAL_CELL_STATE.OK
+                status: 'OK'
             }))
         };
         /** @type {import("./srvSpiralSectionStorage").ClassSpiralSectionStorage['_I_CurrBuffer']} */
@@ -149,12 +146,14 @@ class ClassSpiralSectionStorage {
      */
     get State() { return this.#_FSM.State; }
 
+    get StateAdapter() { return this.#_StateAdapter; }
+
     /**
      * @type {import("./srvSpiralSectionStorage").ClassSpiralSectionStorage['IsAvailable']}
      */
     IsAvailable({ row, column }) {
         const ind = this.PosToInd({ row, col: column });
-        return [SPIRAL_CELL_STATE.OK, SPIRAL_CELL_STATE.ERR_TAMPER, SPIRAL_CELL_STATE.ACTUATOR_NO_POWER].includes(this.#_SectionState.Cells[ind].Status);
+        return this.#_StateAdapter.IsCellAvailable(ind);
     }
 
     /**
@@ -163,11 +162,11 @@ class ClassSpiralSectionStorage {
     IsCheckable({ row, column, col }) {
         column = column ?? col;
         for (let u of this.RowIterator(row)) {
-            if (u.status == SPIRAL_CELL_STATE.ACTUATOR_SHORT_CIRCUIT)
+            if (this.#_StateAdapter.IsCellShorted(u.index))
                 return false;
         }
         const ind = this.PosToInd({ row, col: column });
-        return [SPIRAL_CELL_STATE.OK, SPIRAL_CELL_STATE.ERR_TAMPER_BAD_POS, SPIRAL_CELL_STATE.ACTUATOR_NO_POWER].includes(this.#_SectionState.Cells[ind].Status);
+        return this.#_StateAdapter.IsCellCheckable(ind);
     }
 
     /**
@@ -313,34 +312,34 @@ class ClassSpiralSectionStorage {
             // console.log(JSON.stringify({ state: this.#_FSM.State, I_curr, I_im: this.#_ProxyCh.GetValue(this.#_Channels.current), I_currState}));
             switch (I_currState) {
                 case ELECTR_CURR_STATE.SHORT:
-                    if (this.#_SectionState.Cells[index].Status != SPIRAL_CELL_STATE.ACTUATOR_SHORT_CIRCUIT) {
+                    if (!this.#_StateAdapter.IsCellShorted(index)) {
                         this._ProxyLogger.Log({ level: 'E', msg: `[STORAGE] Мониторинг зафиксировал КЗ. Ток: ${I_curr}` });
-                            this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index }));
-                    } else {
-                        // Повторно записываем статус, чтобы обновить время последнего изменения но не запускаем реакцию
-                        this.#_SectionState.Cells[index].Status = SPIRAL_CELL_STATE.ACTUATOR_SHORT_CIRCUIT;
+                        this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_SHORT_CIRCUIT, index }));
                     }
                     break;
 
                 case ELECTR_CURR_STATE.OVERLOAD:
-                    if (this.#_SectionState.Cells[index] == SPIRAL_CELL_STATE.OK)
-                        this.UpdateStorageContext({ index }, { scope: 'single', status: SPIRAL_CELL_STATE.OVERLOAD_I })
+                    if (this.#_StateAdapter.IsCellOk(index)) {
+                        this.#_StateAdapter.SetCellOverload(index);
+                        this.UpdateStorageContext({ index }, { scope: 'single', faultCode: FAULTS.LIFT_OVERLOAD });
+                    }
                     break;
 
                 case ELECTR_CURR_STATE.IDLE:
-                    if (this.#_SectionState.Cells[index] != SPIRAL_CELL_STATE.ACTUATOR_NO_POWER) 
+                    if (!this.#_StateAdapter.HasCellNoPower(index)) {
                         if (++this.nopower_count == 6) {
                             this._ProxyLogger.Log({ level: 'E', msg: `[STORAGE] Мониторинг зафиксировал отсутствие питания. Ток: ${I_curr}` });
                             this.#_FSM.Dispatch(this.EVENTS.FAULT, new StorageFault({ code: FAULTS.ACTUATOR_NO_POWER, index }));
                         } else {
                             this._ProxyLogger.Log({ level: 'E', msg: `[STORAGE] Мониторинг зафиксировал возможное отсутствие питания. Ток: ${I_curr}` });
                         }
-                        this.ClearOverloadStatus();
-
+                    }
+                    this.ClearOverloadStatus();
                     break;
 
                 case ELECTR_CURR_STATE.WORK_OK:
-                    this.UpdateStorageContext({ index }, { scope: 'single', status: SPIRAL_CELL_STATE.OK });
+                    this.#_StateAdapter.SetCellOk(index);
+                    this.UpdateStorageContext({ index }, { scope: 'single', isOk: true });
                     this.nopower_count = 0;
                     this.ClearOverloadStatus();
                 
@@ -359,9 +358,11 @@ class ClassSpiralSectionStorage {
      * @type {import("./srvSpiralSectionStorage").ClassSpiralSectionStorage['ClearOverloadStatus']}
      */
     ClearOverloadStatus() {
+        this.#_StateAdapter.ClearCellsOverload();
         for (let u of this.#_Context.units) {
-            if (u.status == SPIRAL_CELL_STATE.OVERLOAD_I) 
-                this.UpdateStorageContext({ index: u.index }, { scope: 'single', status: SPIRAL_CELL_STATE.OK });
+            if (u.status === 'OVERLOAD_I' || u.status === FAULTS.LIFT_OVERLOAD) {
+                u.status = 'OK';
+            }
         }
     }
 
@@ -616,7 +617,7 @@ class ClassSpiralSectionStorage {
         try {
             await this.MotorOnPhased(index);
             this._ProxyLogger.Log({ level: 'D', msg: `[STORAGE] Включен мотор` });
-            this.#_SectionState.Cells[index].Action = CELL_ACTION.ACTION;
+            this.#_StateAdapter.SetCellDispenseStart(index);
             this._PollingTimeout = setTimeout(() => {
                 this.#_Polling = true;
             }, manual ? 0 : TAMPER_DEBOUNCE);
@@ -692,19 +693,27 @@ class ClassSpiralSectionStorage {
     /**
      * @type {import("./srvSpiralSectionStorage").ClassSpiralSectionStorage['UpdateStorageContext']}
      */
-    UpdateStorageContext({ index }, { dispensed = 0, scope='single', status, except = [] }) {
+    UpdateStorageContext({ index }, { dispensed = 0, scope = 'single', faultCode, isOk, status, except = [] }) {
         if (this.#_Context.currentOrder)
             this.#_Context.currentOrder.itemsDispensed += dispensed;
 
         for (const unit of this.UnitsByScope(index, scope)) {
             unit.itemsDispensed += dispensed;
 
-            if (status) {
-                if (!except.includes(this.#_SectionState.Cells[index].Status)) {
-                    unit.status = status;
-                    this.#_SectionState.Cells[unit.index].Status = status;
-                    this.#_Context.units[unit.index].status = status;
+            if (faultCode !== undefined) {
+                const isProtected = this.#_StateAdapter.IsCellShorted(unit.index) || this.#_StateAdapter.HasCellNoPower(unit.index);
+                if (!isProtected || faultCode === FAULTS.ACTUATOR_SHORT_CIRCUIT || faultCode === FAULTS.ACTUATOR_NO_POWER) {
+                    this.#_StateAdapter.SetCellFault(unit.index, faultCode);
+                    unit.status = faultCode;
+                    this.#_Context.units[unit.index].status = faultCode;
                 }
+            } else if (isOk) {
+                this.#_StateAdapter.SetCellOk(unit.index);
+                unit.status = 'OK';
+                this.#_Context.units[unit.index].status = 'OK';
+            } else if (status) {
+                unit.status = status;
+                this.#_Context.units[unit.index].status = status;
             }
         }
     }
@@ -713,7 +722,11 @@ class ClassSpiralSectionStorage {
      * @type {import("./srvSpiralSectionStorage").ClassSpiralSectionStorage['GetStorageInfo']}
      */
     GetStorageInfo({ index }) {
-        return { ...this.#_SectionState.Cells[index].Status };
+        return {
+            available: this.#_StateAdapter.IsCellAvailable(index),
+            ok: this.#_StateAdapter.IsCellOk(index),
+            shorted: this.#_StateAdapter.IsCellShorted(index),
+        };
     }
 
     /**
@@ -880,8 +893,6 @@ class ClassSpiralSectionStorage {
      */
     async MotorOffAll() {
         return this.MotorStep('Off', { index: undefined, step: undefined });
-        // await sleep(TIME_BETWEEN_STEPS);
-        // TODO: check current
     }
 
     /**
@@ -924,29 +935,29 @@ class ClassSpiralSectionStorage {
 
         switch (fault.code) {
             case FAULTS.ERR_TAMPER:
-                this.UpdateStorageContext({ index }, { scope: 'single', status: SPIRAL_CELL_STATE.ERR_TAMPER });
+                this.UpdateStorageContext({ index }, { scope: 'single', faultCode: FAULTS.ERR_TAMPER });
                 break;
 
             case FAULTS.TAMPER_BAD_POS:
-                this.UpdateStorageContext({ index }, { scope: 'row', status: SPIRAL_CELL_STATE.ERR_TAMPER_BAD_POS, except: STATUS_EXCEPT });
+                this.UpdateStorageContext({ index }, { scope: 'row', faultCode: FAULTS.TAMPER_BAD_POS });
                 break;
 
             case FAULTS.ACTUATOR_NO_POWER:
-                this.UpdateStorageContext({ index }, { scope: 'single', status: SPIRAL_CELL_STATE.ACTUATOR_NO_POWER });
+                this.UpdateStorageContext({ index }, { scope: 'single', faultCode: FAULTS.ACTUATOR_NO_POWER });
                 break;
 
             case FAULTS.IO_DRIVER_ERR:
-                this.UpdateStorageContext({ index }, { scope: 'single', status: SPIRAL_CELL_STATE.BLOCKED });
+                this.UpdateStorageContext({ index }, { scope: 'single', faultCode: FAULTS.IO_DRIVER_ERR });
                 break;
 
             case FAULTS.ACTUATOR_SHORT_CIRCUIT:
-                this.UpdateStorageContext({ index }, { scope: 'row', status: SPIRAL_CELL_STATE.BLOCKED, except: STATUS_EXCEPT });
-                this.UpdateStorageContext({ index }, { scope: 'single', status: SPIRAL_CELL_STATE.ACTUATOR_SHORT_CIRCUIT });
+                this.UpdateStorageContext({ index }, { scope: 'row', faultCode: FAULTS.IO_DRIVER_ERR });
+                this.UpdateStorageContext({ index }, { scope: 'single', faultCode: FAULTS.ACTUATOR_SHORT_CIRCUIT });
                 break;
 
             case FAULTS.IO_PORT_ERR:
             case FAULTS.IO_TIMEOUT:
-                this.UpdateStorageContext({ index }, { scope: 'all', status: SPIRAL_CELL_STATE.BLOCKED, except: STATUS_EXCEPT });
+                this.UpdateStorageContext({ index }, { scope: 'all', faultCode: fault.code });
                 break;
         }
     }
@@ -984,8 +995,13 @@ class ClassSpiralSectionStorage {
         this.#_Context.units = this.#_Context.units.map(u => ({
             ...u,
             itemsDispensed: 0,
-            status: SPIRAL_CELL_STATE.OK,
+            status: 'OK',
         }));
+        if (this.#_Context?.units) {
+            for (let i = 0; i < this.#_Context.units.length; i++) {
+                this.#_StateAdapter.SetCellReady(i);
+            }
+        }
         if (this.#_Context.currentTask?.rej) {
             this.#_Context.currentTask.rej(new Error('Reset'));
         }

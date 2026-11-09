@@ -1,9 +1,7 @@
 const { ClassFSM: FSM } = require('./srvFSM');
 const { ClassFault } = require('./srvUtils');
 const { BOX_CONSTANTS, FAULTS } = require('./SpiralSectionConstants');
-const { default: BaseSectionState } = require("../../srvSpiralSection/js/srvSpiralSectionStates");
-const { default: SpiralSectionState } = require('./srvSpiralSectionStates');
-const { DELIVERY_BOX_STATE } = require('../../srvStatesController/ts/ISpiralSectionStates');
+const { SpiralStateAdapter } = require('./srvSpiralStateAdapter');
 const { EventEmitter2 } = require('eventemitter2');
 
 const DOOR_DEBOUNCE_MS = BOX_CONSTANTS.DOOR_DEBOUNCE ?? 300;
@@ -23,8 +21,8 @@ class ClassDeliveryBox extends EventEmitter2 {
         TIMEOUT: 'OPEN_TIMEOUT',
         FINISH: 'FINISH'
     };
-    /** @type {SpiralSectionState} */
-    #_SectionState = null;
+    /** @type {SpiralStateAdapter} */
+    #_StateAdapter = null;
     #_FSM;
     #_StateGraph = {
         [ClassDeliveryBox.STATE.CLOSED]: {
@@ -78,11 +76,11 @@ class ClassDeliveryBox extends EventEmitter2 {
      * @param {BaseSectionState} param0.sectionState
      * @param {import('../../srvLogger/js/srvProxyLogger').ClassProxyLogger} param0.ProxyLogger
      */
-    constructor({ ProxyCh, ProxyLogger, channels, advOpts, sectionState }) {
+    constructor({ ProxyCh, ProxyLogger, channels, advOpts, sectionState, stateAdapter }) {
         super();
         this.#_ProxyCh = ProxyCh;
         this._ProxyLogger = ProxyLogger;
-        this.#_SectionState = sectionState;
+        this.#_StateAdapter = stateAdapter ?? new SpiralStateAdapter(sectionState);
         this.#_Channels = channels;
         this.unlockTimeout = BOX_CONSTANTS.UNLOCKED_TIMEOUT_SEC ?? 100;
         this.#_FSM = new FSM({      // TODO clear on reset
@@ -92,15 +90,19 @@ class ClassDeliveryBox extends EventEmitter2 {
                 this._ProxyLogger.Log({ level: 'D', msg: `[BOX] ${prevState} -> ${state}` });
                 switch (state) {
                     case ClassDeliveryBox.STATE.OPENED:
-                        this.#_SectionState.DeliveryBox = DELIVERY_BOX_STATE.OPENED;
+                        this.#_StateAdapter.SetBoxOpen();
                         break;
                     case ClassDeliveryBox.STATE.CLOSED:
-                        this.#_SectionState.DeliveryBox = DELIVERY_BOX_STATE.CLOSED;
+                        this.#_StateAdapter.SetBoxClose();
                         break;
                 }
             }).bind(this)
         });
         this.InitEventHandlers();
+    }
+
+    get StateAdapter() {
+        return this.#_StateAdapter;
     }
 
     get IsLockOpen() {
@@ -253,7 +255,7 @@ class ClassDeliveryBox extends EventEmitter2 {
         this.#_Context.currentTask = null;
 
         this.SetLockState(BOX_CONSTANTS.UNLOCK_OFF);
-        this.#_SectionState.DeliveryBox = DELIVERY_BOX_STATE.CLOSED;
+        this.#_StateAdapter.SetBoxReady();
 
         // for (let [eventName, handler] of this.#_DoorHandlers)
         //     this.#_ProxyCh.Events.off(eventName, handler);
