@@ -160,33 +160,37 @@ describe('ClassVendingSectionFacade & ClassSpiralSection — Базовые те
             assert.ok(section);
             assert.equal(facade.Target.id, '1');
             assert.equal(facade.Target.name, 'Machine-1-spiral');
+            assert.equal(facade.StateAdapter.IsSectionBlocked, false);
+            assert.equal(facade.StateAdapter.IsSectionAvailable, true);
             assert.equal(sectionState.Status, SECTION_STATUS.IDLE);
             assert.equal(sectionState.IsAvailable, AVAILABLE_STATE.YES);
             assert.equal(section.IsDoorClosed(), true);
         });
 
-        it('отслеживает состояние двери: при открытии переводит Door в OPENED и вызывает Abort()', () => {
-            assert.equal(sectionState.Door, undefined);
+        it('отслеживает состояние двери: при открытии переводит Door в OPENED/OPEN и вызывает Abort()', () => {
+            assert.equal(facade.StateAdapter.IsDoorClosed, true);
 
             // Размыкание концевика сервисной двери (0 = открыта)
             stub.inject('door-channel', 0);
 
-            assert.equal(sectionState.Door, 'OPENED');
+            assert.equal(facade.StateAdapter.IsDoorClosed, false);
             assert.equal(section.IsDoorClosed(), false);
+            assert.equal(sectionState.Door, 'OPEN');
 
             // Закрытие двери обратно (1 = закрыта)
             stub.inject('door-channel', BOX_CONSTANTS.DOOR_CLOSED);
-            assert.equal(sectionState.Door, 'CLOSED');
+            assert.equal(facade.StateAdapter.IsDoorClosed, true);
             assert.equal(section.IsDoorClosed(), true);
+            assert.equal(sectionState.Door, 'CLOSED');
         });
 
         it('игнорирует повторные одинаковые события датчика двери', () => {
             stub.inject('door-channel', 0);
-            const doorStateAfterFirst = sectionState.Door;
+            const doorClosedAfterFirst = facade.StateAdapter.IsDoorClosed;
 
             // Повторная отправка того же значения
             stub.inject('door-channel', 0);
-            assert.equal(sectionState.Door, doorStateAfterFirst);
+            assert.equal(facade.StateAdapter.IsDoorClosed, doorClosedAfterFirst);
         });
 
         it('WatchBox отслеживает оптический датчик люка, выставляет monBox в 1 и вызывает Abort()', async () => {
@@ -412,12 +416,13 @@ describe('ClassVendingSectionFacade & ClassSpiralSection — Базовые те
 
         it('Reset() сбрасывает контекст заказа и переводит секцию в состояние IDLE / AVAILABLE', () => {
             facade._Context.order = { ID: 'aborted-order', Cells: [] };
-            sectionState.Status = SECTION_STATUS.BLOCKED;
-            sectionState.IsAvailable = AVAILABLE_STATE.NO;
+            facade.StateAdapter.SetSectionBlocked();
 
             facade.Reset();
 
             assert.equal(facade._Context.order, null);
+            assert.equal(facade.StateAdapter.IsSectionBlocked, false);
+            assert.equal(facade.StateAdapter.IsSectionAvailable, true);
             assert.equal(sectionState.Status, SECTION_STATUS.IDLE);
             assert.equal(sectionState.IsAvailable, AVAILABLE_STATE.YES);
         });

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 const { ClassSpiralSectionLift } = require('../../../js/srvSpiralSectionLift');
 const { LIFT_CONSTANTS, COMMON_CONSTANTS, FAULTS } = require('../../../js/SpiralSectionConstants');
-const { SpiralSectionState, LIFT_STATE } = require('../../../js/srvSpiralSectionStates');
+const { SpiralSectionState } = require('../../../js/srvSpiralSectionStates');
 const { ProxyChannelStub } = require('../../../../../tests/helpers/ProxyChannelStub');
 const { Lift } = require('../../../../VMEmulator');
 
@@ -242,7 +242,7 @@ describe('ClassSpiralSectionLift — управление актуаторами
         });
 
         it('отклоняет вызов ElevateToBottom(), если статус лифта SHORT_CIRCUIT или OVERLOAD (!Available)', async () => {
-            sectionState.Lift = LIFT_STATE.OVERLOAD;
+            lift.StateAdapter.SetLiftFault(FAULTS.LIFT_OVERLOAD);
 
             await assert.rejects(
                 () => lift.ElevateToBottom(),
@@ -338,7 +338,7 @@ describe('ClassSpiralSectionLift — управление актуаторами
 
             assert.equal(lift.Level, 3);
             assert.equal(lift.State, ClassSpiralSectionLift.STATE.IDLE);
-            assert.equal(sectionState.Lift, LIFT_STATE.OK);
+            assert.equal(lift.StateAdapter.IsLiftOk, true);
         });
 
         it('прерывает перемещение с ошибкой FAULTS.LIFT_SHORT_CIRCUIT при устойчивом токе КЗ в течение 2 интервалов монитора', async () => {
@@ -355,7 +355,8 @@ describe('ClassSpiralSectionLift — управление актуаторами
                 (fault) => fault.code === FAULTS.LIFT_SHORT_CIRCUIT
             );
 
-            assert.equal(sectionState.Lift, LIFT_STATE.SHORT_CIRCUIT);
+            assert.equal(lift.StateAdapter.IsLiftOk, false);
+            assert.equal(lift.StateAdapter.IsLiftAvailable, false);
             assert.equal(stub.getLastSentValue(channels.liftMotorCtrl2), 'STOP');
         });
 
@@ -373,7 +374,7 @@ describe('ClassSpiralSectionLift — управление актуаторами
                 (fault) => fault.code === FAULTS.LEVEL_SENSOR_FAIL
             );
 
-            assert.equal(sectionState.Lift, LIFT_STATE.ERR_LEVEL);
+            assert.equal(lift.StateAdapter.HasLiftLevelError, true);
             assert.equal(lift.Level, undefined);
             assert.equal(stub.getLastSentValue(channels.liftMotorCtrl2), 'STOP');
         });

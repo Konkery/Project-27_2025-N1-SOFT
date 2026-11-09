@@ -197,7 +197,7 @@ describe('ClassSpiralSectionStorage — управление актуатора�
             });
 
             assert.equal(storage.State, ClassSpiralSectionStorage.STATE.IDLE);
-            assert.equal(sectionState.Cells[5].Status, SPIRAL_CELL_STATE.OK);
+            assert.equal(storage.StateAdapter.IsCellOk(5), true);
         });
 
         it('MotorOff() выполняет двухшаговое отключение (step 1 GND -> контроль падения тока -> step 2 V+)', async () => {
@@ -245,7 +245,7 @@ describe('ClassSpiralSectionStorage — управление актуатора�
             await storage.TestSpiral(order);
 
             assert.equal(storage.State, ClassSpiralSectionStorage.STATE.IDLE);
-            assert.equal(sectionState.Cells[targetInd].Status, SPIRAL_CELL_STATE.OK);
+            assert.equal(storage.StateAdapter.IsCellOk(targetInd), true);
 
             const sent = stub.getSentValues(channels.matrixCtrlChannel);
             assert.deepEqual(sent[0], {
@@ -290,10 +290,10 @@ describe('ClassSpiralSectionStorage — управление актуатора�
             );
 
             // При IO_PORT_ERR все ячейки секции переводятся в BLOCKED (scope: 'all')
-            assert.equal(
-                sectionState.Cells.every((c) => c.Status === SPIRAL_CELL_STATE.BLOCKED),
-                true
-            );
+            const allBlocked = Array.from({ length: ROWS * COLS }, (_, i) => sectionState.Cells[i].Status === SPIRAL_CELL_STATE.BLOCKED).every(Boolean);
+            assert.equal(allBlocked, true);
+            const allUnavailable = Array.from({ length: ROWS * COLS }, (_, i) => !storage.StateAdapter.IsCellAvailable(i)).every(Boolean);
+            assert.equal(allUnavailable, true);
         });
     });
 
@@ -411,6 +411,7 @@ describe('ClassSpiralSectionStorage — управление актуатора�
                 (fault) => fault.code === FAULTS.ACTUATOR_NO_POWER && fault.index === targetInd
             );
 
+            assert.equal(storage.StateAdapter.HasCellNoPower(targetInd), true);
             assert.equal(sectionState.Cells[targetInd].Status, SPIRAL_CELL_STATE.ACTUATOR_NO_POWER);
             assert.equal(failEvents.length, 1);
             assert.deepEqual(failEvents[0].cell, { row: order.row, column: order.column });

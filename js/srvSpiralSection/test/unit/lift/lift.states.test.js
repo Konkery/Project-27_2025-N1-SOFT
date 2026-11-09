@@ -91,7 +91,7 @@ describe('ClassSpiralSectionLift — управление состояниями
     // 1. Обновление статуса: UpdateStatus(fault)
     // =========================================================================
     describe('UpdateStatus(fault) — трансляция аварий в статусы цифрового двойника', () => {
-        it('корректно маппит коды ошибок FAULTS в состояния sectionState.Lift', () => {
+        it('корректно маппит коды ошибок FAULTS в состояния sectionState.Lift и StateAdapter', () => {
             const cases = [
                 { code: FAULTS.BOTTOM_TAMPER_FAIL, expected: LIFT_STATE.ERR_TAMPER },
                 { code: FAULTS.IO_DRIVER_ERR,      expected: LIFT_STATE.BLOCKED },
@@ -103,12 +103,12 @@ describe('ClassSpiralSectionLift — управление состояниями
             ];
 
             for (const { code, expected } of cases) {
-                sectionState.Lift = LIFT_STATE.OK;
+                lift.StateAdapter.SetLiftReady();
                 lift.UpdateStatus(new Fault({ code }));
                 assert.equal(
-                    sectionState.Lift,
+                    sectionState.Lift.Status,
                     expected,
-                    `Код ошибки ${code} должен переводить Lift в ${expected}`
+                    `Код ошибки ${code} должен переводить sectionState.Lift.Status в ${expected}`
                 );
             }
         });
@@ -126,46 +126,54 @@ describe('ClassSpiralSectionLift — управление состояниями
             // Отказ датчика уровня обязан сбросить currentLevel в undefined
             lift.UpdateStatus(new Fault({ code: FAULTS.LEVEL_SENSOR_FAIL }));
             assert.equal(lift.Level, undefined);
-            assert.equal(sectionState.Lift, LIFT_STATE.ERR_LEVEL);
+            assert.equal(lift.StateAdapter.HasLiftLevelError, true);
+            assert.equal(sectionState.Lift.Status, LIFT_STATE.ERR_LEVEL);
         });
 
-        it('не изменяет sectionState.Lift при неизвестном коде ошибки или FAULTS.NONE', () => {
-            sectionState.Lift = LIFT_STATE.OK;
+        it('не изменяет состояние при неизвестном коде ошибки или FAULTS.NONE', () => {
+            lift.StateAdapter.SetLiftReady();
             lift.UpdateStatus(new Fault({ code: FAULTS.NONE }));
-            assert.equal(sectionState.Lift, LIFT_STATE.OK);
+            assert.equal(lift.StateAdapter.IsLiftOk, true);
+            assert.equal(sectionState.Lift.Status, LIFT_STATE.OK);
         });
     });
 
     // =========================================================================
-    // 2. Геттеры состояния: Status, Available, Level, State, EVENTS
+    // 2. Геттеры состояния: Available, Level, State, EVENTS
     // =========================================================================
-    describe('Геттеры Status, Available, Level и EVENTS', () => {
-        it('Status возвращает текущее значение sectionState.Lift', () => {
-            assert.equal(lift.Status, LIFT_STATE.OK);
+    describe('Геттеры Available, Level и EVENTS', () => {
+        it('HasLiftLevelError и IsLiftOk отражают состояние лифта', () => {
+            assert.equal(lift.StateAdapter.IsLiftOk, true);
 
-            sectionState.Lift = LIFT_STATE.ERR_LEVEL;
-            assert.equal(lift.Status, LIFT_STATE.ERR_LEVEL);
+            lift.StateAdapter.SetLiftFault(FAULTS.LEVEL_SENSOR_FAIL);
+            assert.equal(lift.StateAdapter.HasLiftLevelError, true);
+            assert.equal(lift.StateAdapter.IsLiftOk, false);
+            assert.equal(sectionState.Lift.Status, LIFT_STATE.ERR_LEVEL);
         });
 
         it('Available возвращает false только для критических статусов SHORT_CIRCUIT и OVERLOAD', () => {
-            const availableStatuses = [
-                LIFT_STATE.OK,
-                LIFT_STATE.ERR_TAMPER,
-                LIFT_STATE.ERR_LEVEL,
-                LIFT_STATE.NO_POWER,
-                LIFT_STATE.BLOCKED,
+            const availableCases = [
+                FAULTS.BOTTOM_TAMPER_FAIL,
+                FAULTS.LEVEL_SENSOR_FAIL,
+                FAULTS.LIFT_NO_POWER,
             ];
 
-            for (const st of availableStatuses) {
-                sectionState.Lift = st;
-                assert.equal(lift.Available, true, `При статусе ${st} лифт должен иметь Available === true`);
+            for (const code of availableCases) {
+                lift.StateAdapter.SetLiftReady();
+                lift.UpdateStatus(new Fault({ code }));
+                assert.equal(lift.Available, true, `При ошибке ${code} лифт должен оставаться Available`);
+                assert.equal(lift.StateAdapter.IsLiftAvailable, true);
             }
 
-            sectionState.Lift = LIFT_STATE.SHORT_CIRCUIT;
+            lift.StateAdapter.SetLiftFault(FAULTS.LIFT_SHORT_CIRCUIT);
             assert.equal(lift.Available, false);
+            assert.equal(lift.StateAdapter.IsLiftAvailable, false);
+            assert.equal(sectionState.Lift.Status, LIFT_STATE.SHORT_CIRCUIT);
 
-            sectionState.Lift = LIFT_STATE.OVERLOAD;
+            lift.StateAdapter.SetLiftFault(FAULTS.LIFT_OVERLOAD);
             assert.equal(lift.Available, false);
+            assert.equal(lift.StateAdapter.IsLiftAvailable, false);
+            assert.equal(sectionState.Lift.Status, LIFT_STATE.OVERLOAD);
         });
 
         it('Level изначально равен undefined и устанавливается в 0 при срабатывании нижнего тампера', () => {

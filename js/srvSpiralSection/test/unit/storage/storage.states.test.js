@@ -95,64 +95,52 @@ describe('ClassSpiralSectionStorage — управление состояния�
             // Одиночное обновление ячейки 4 (row 1, col 1)
             storage.UpdateStorageContext(
                 { index: targetCellIndex },
-                { dispensed: TEST_DISPENSED_COUNT, scope: 'single', status: SPIRAL_CELL_STATE.ERR_TAMPER }
+                { dispensed: TEST_DISPENSED_COUNT, scope: 'single', faultCode: FAULTS.ERR_TAMPER }
             );
 
+            assert.equal(storage.StateAdapter.IsCellOk(targetCellIndex), false);
+            assert.equal(storage.StateAdapter.IsCellOk(3), true);
+            assert.equal(storage.StateAdapter.IsCellOk(5), true);
             assert.equal(sectionState.Cells[targetCellIndex].Status, SPIRAL_CELL_STATE.ERR_TAMPER);
             assert.equal(sectionState.Cells[3].Status, SPIRAL_CELL_STATE.OK);
             assert.equal(sectionState.Cells[5].Status, SPIRAL_CELL_STATE.OK);
 
             const unit4 = [...storage.UnitsByScope(targetCellIndex, 'single')][0];
             assert.equal(unit4.itemsDispensed, TEST_DISPENSED_COUNT);
-            assert.equal(unit4.status, SPIRAL_CELL_STATE.ERR_TAMPER);
         });
 
         it('UpdateStorageContext() с параметром except не перезаписывает защищенные статусы в ряду', () => {
-            // В ряду 1 (индексы 3, 4, 5) ячейка 3 уже имеет статус ERR_TAMPER
+            // В ряду 1 (индексы 3, 4, 5) ячейка 3 уже имеет статус ACTUATOR_SHORT_CIRCUIT
             storage.UpdateStorageContext(
                 { index: 3 },
-                { scope: 'single', status: SPIRAL_CELL_STATE.ERR_TAMPER }
+                { scope: 'single', faultCode: FAULTS.ACTUATOR_SHORT_CIRCUIT }
             );
 
-            // Обновляем весь ряд 1 через базовую ячейку 4 со списком исключений except: [ERR_TAMPER]
+            // Обновляем весь ряд 1 через базовую ячейку 4 с ошибкой драйвера
             storage.UpdateStorageContext(
                 { index: 4 },
                 {
                     scope: 'row',
-                    status: SPIRAL_CELL_STATE.BLOCKED,
-                    except: [SPIRAL_CELL_STATE.ERR_TAMPER],
+                    faultCode: FAULTS.IO_DRIVER_ERR,
                 }
             );
 
             assert.equal(sectionState.Cells[4].Status, SPIRAL_CELL_STATE.BLOCKED);
             assert.equal(sectionState.Cells[5].Status, SPIRAL_CELL_STATE.BLOCKED);
-
-            // А если сама базовая ячейка index=3 входит в except, перезапись блокируется
-            storage.UpdateStorageContext(
-                { index: 3 },
-                {
-                    scope: 'single',
-                    status: SPIRAL_CELL_STATE.ERR_TAMPER,
-                }
-            );
-            storage.UpdateStorageContext(
-                { index: 3 },
-                {
-                    scope: 'single',
-                    status: SPIRAL_CELL_STATE.BLOCKED,
-                    except: [SPIRAL_CELL_STATE.ERR_TAMPER],
-                }
-            );
-            assert.equal(sectionState.Cells[3].Status, SPIRAL_CELL_STATE.ERR_TAMPER);
+            // Защищенный статус КЗ не перезаписался на BLOCKED
+            assert.equal(sectionState.Cells[3].Status, SPIRAL_CELL_STATE.ACTUATOR_SHORT_CIRCUIT);
         });
 
         it('ClearOverloadStatus() сбрасывает все ячейки со статусом OVERLOAD_I обратно в OK, не трогая другие ошибки', () => {
-            storage.UpdateStorageContext({ index: 1 }, { scope: 'single', status: SPIRAL_CELL_STATE.OVERLOAD_I });
-            storage.UpdateStorageContext({ index: 5 }, { scope: 'single', status: SPIRAL_CELL_STATE.OVERLOAD_I });
-            storage.UpdateStorageContext({ index: 8 }, { scope: 'single', status: SPIRAL_CELL_STATE.ERR_TAMPER });
+            storage.StateAdapter.SetCellOverload(1);
+            storage.StateAdapter.SetCellOverload(5);
+            storage.StateAdapter.SetCellFault(8, FAULTS.ERR_TAMPER);
 
             storage.ClearOverloadStatus();
 
+            assert.equal(storage.StateAdapter.IsCellOk(1), true);
+            assert.equal(storage.StateAdapter.IsCellOk(5), true);
+            assert.equal(storage.StateAdapter.IsCellOk(8), false);
             assert.equal(sectionState.Cells[1].Status, SPIRAL_CELL_STATE.OK);
             assert.equal(sectionState.Cells[5].Status, SPIRAL_CELL_STATE.OK);
             assert.equal(sectionState.Cells[8].Status, SPIRAL_CELL_STATE.ERR_TAMPER);
@@ -167,19 +155,19 @@ describe('ClassSpiralSectionStorage — управление состояния�
             const cell = { row: 1, column: 2 };
             const ind = storage.PosToInd(cell);
 
-            sectionState.Cells[ind].Status = SPIRAL_CELL_STATE.OK;
+            storage.StateAdapter.SetCellReady(ind);
             assert.equal(storage.IsAvailable(cell), true);
 
-            sectionState.Cells[ind].Status = SPIRAL_CELL_STATE.ERR_TAMPER;
+            storage.StateAdapter.SetCellFault(ind, FAULTS.ERR_TAMPER);
             assert.equal(storage.IsAvailable(cell), true);
 
-            sectionState.Cells[ind].Status = SPIRAL_CELL_STATE.ACTUATOR_NO_POWER;
+            storage.StateAdapter.SetCellFault(ind, FAULTS.ACTUATOR_NO_POWER);
             assert.equal(storage.IsAvailable(cell), true);
 
-            sectionState.Cells[ind].Status = SPIRAL_CELL_STATE.BLOCKED;
+            storage.StateAdapter.SetCellFault(ind, FAULTS.IO_DRIVER_ERR);
             assert.equal(storage.IsAvailable(cell), false);
 
-            sectionState.Cells[ind].Status = SPIRAL_CELL_STATE.OVERLOAD_I;
+            storage.StateAdapter.SetCellOverload(ind);
             assert.equal(storage.IsAvailable(cell), false);
         });
 
@@ -193,10 +181,7 @@ describe('ClassSpiralSectionStorage — управление состояния�
             assert.equal(storage.IsCheckable(cellB), true);
 
             // Навешиваем КЗ на ячейку cellA
-            storage.UpdateStorageContext(
-                { index: indA },
-                { scope: 'single', status: SPIRAL_CELL_STATE.ACTUATOR_SHORT_CIRCUIT }
-            );
+            storage.StateAdapter.SetCellFault(indA, FAULTS.ACTUATOR_SHORT_CIRCUIT);
 
             // Теперь ни одна ячейка 2-го ряда не checkable
             assert.equal(storage.IsCheckable(cellA), false);
@@ -216,10 +201,8 @@ describe('ClassSpiralSectionStorage — управление состояния�
             storage.UpdateStatus({ code: FAULTS.ERR_TAMPER, index: 0 });
 
             // Ни одна ячейка не должна изменить статус OK
-            assert.equal(
-                sectionState.Cells.every((c) => c.Status === SPIRAL_CELL_STATE.OK),
-                true
-            );
+            const allOk = [0, 1, 2, 3, 4, 5, 6, 7, 8].every((i) => storage.StateAdapter.IsCellOk(i));
+            assert.equal(allOk, true);
         });
 
         it('OnStateChanged() форматирует и передает запись о смене состояния автомата в ProxyLogger', () => {
