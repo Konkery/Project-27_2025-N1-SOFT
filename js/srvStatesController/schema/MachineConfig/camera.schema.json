@@ -4,9 +4,9 @@
   "description": "Конфигурация IP-видеокамеры",
   "type": "object",
   "properties": {
-    "RefDes": {
+    "ID": {
       "type": "string",
-      "description": "Обозначение камеры на монтажной схеме"
+      "description": "Идентификатор камеры (например, CAM1)"
     },
     "Model": {
       "type": "string",
@@ -39,6 +39,10 @@
       "type": "number",
       "description": "Начальная установка наклона"
     },
+    "WEB_URL": {
+      "type": "string",
+      "description": "URL веб-интерфейса камеры (опционально)"
+    },
     "Net": {
       "type": "object",
       "description": "Сетевые параметры камеры",
@@ -60,7 +64,7 @@
     }
   },
   "required": [
-    "RefDes",
+    "ID",
     "Model",
     "Lens",
     "Pan",

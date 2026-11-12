@@ -6,7 +6,7 @@
   "properties": {
     "Name": {
       "type": "string",
-      "description": "Уникальное имя секции (например, 'spiral', 'postomat')"
+      "description": "Уникальное имя секции (например, 'Machine-1-spiral', 'Machine-1-postomat')"
     },
     "ID": {
       "type": "string",
@@ -24,8 +24,11 @@
       "description": "Число ячеек на полке"
     },
     "PowerBus": {
-      "type": "number",
-      "description": "Номер подключенной шины электропитания"
+      "type": [
+        "string",
+        "number"
+      ],
+      "description": "Идентификатор или номер подключенной шины электропитания (например, 'BUS-3')"
     },
     "IOList": {
       "type": "array",
@@ -39,12 +42,6 @@
     },
     "Lift": {
       "$ref": "#/definitions/SectionLiftConfig"
-    },
-    "Storage": {
-      "$ref": "#/definitions/SectionStorageConfig"
-    },
-    "CellOpts": {
-      "$ref": "#/definitions/SectionCellOptsConfig"
     }
   },
   "required": [
@@ -95,6 +92,9 @@
         },
         "Led": {
           "$ref": "#/definitions/LedChannelsConfig"
+        },
+        "Power": {
+          "$ref": "#/definitions/SectionPowerChannelsConfig"
         }
       },
       "additionalProperties": false
@@ -141,18 +141,25 @@
       "properties": {
         "MatrixCtrl": {
           "type": "string",
-          "description": "Канал управления матрицей ячеек"
+          "description": "Канал управления матрицей ячеек (спиральная секция)"
         },
-        "Port": {
+        "Rows": {
           "type": "array",
-          "description": "Список каналов строк и колонок для матричного управления",
+          "description": "Список каналов строк матрицы (постамат)",
+          "items": {
+            "type": "string"
+          }
+        },
+        "Cols": {
+          "type": "array",
+          "description": "Список каналов колонок матрицы (постамат)",
           "items": {
             "type": "string"
           }
         },
         "Tamper": {
           "type": "array",
-          "description": "Список каналов датчиков состояния ячеек",
+          "description": "Список каналов датчиков состояния ячеек / полок",
           "items": {
             "type": "string"
           }
@@ -222,41 +229,32 @@
       ],
       "additionalProperties": false
     },
-    "SectionStorageConfig": {
-      "title": "SectionStorageConfig",
-      "description": "Параметры хранилища ячеек",
+    "SectionPowerChannelsConfig": {
+      "title": "SectionPowerChannelsConfig",
+      "description": "Каналы питания секции (контроль тока, напряжения, КЗ и управление питанием приводов)",
       "type": "object",
       "properties": {
-        "TamperPattern": {
+        "Current": {
           "type": "string",
-          "description": "Шаблон имени канала датчиков ячеек"
-        }
-      },
-      "additionalProperties": false
-    },
-    "SectionCellOptsConfig": {
-      "title": "SectionCellOptsConfig",
-      "description": "Параметры адресации строк и колонок ячеек",
-      "type": "object",
-      "properties": {
-        "Row": {
-          "type": "array",
-          "description": "Индексы каналов строк",
-          "items": {
-            "type": "number"
-          }
+          "description": "Канал измерения выходного тока шины/БП"
         },
-        "Col": {
-          "type": "array",
-          "description": "Индексы каналов колонок",
-          "items": {
-            "type": "number"
-          }
+        "Voltage": {
+          "type": "string",
+          "description": "Канал измерения выходного напряжения шины/БП"
+        },
+        "PsuWork": {
+          "type": "string",
+          "description": "Канал дискретного управления питанием приводов (вкл/выкл)"
+        },
+        "Short": {
+          "type": "string",
+          "description": "Канал аварийного сигнала короткого замыкания"
         }
       },
       "required": [
-        "Row",
-        "Col"
+        "Current",
+        "Voltage",
+        "PsuWork"
       ],
       "additionalProperties": false
     }

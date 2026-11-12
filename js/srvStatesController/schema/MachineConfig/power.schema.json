@@ -7,6 +7,13 @@
     "Mains": {
       "$ref": "#/definitions/MainsConfig"
     },
+    "Buses": {
+      "type": "array",
+      "description": "Список распределительных шин электропитания аппарата",
+      "items": {
+        "$ref": "#/definitions/PowerBusConfig"
+      }
+    },
     "PSU": {
       "type": "array",
       "description": "Список источников питания (PSU)",
@@ -14,18 +21,18 @@
         "$ref": "#/definitions/PsuConfig"
       }
     },
-    "Bus": {
+    "UPS": {
       "type": "array",
-      "description": "Список шин распределения электропитания",
+      "description": "Список модулей источников бесперебойного питания (ИБП / UPS)",
       "items": {
-        "$ref": "#/definitions/BusConfig"
+        "$ref": "#/definitions/UpsConfig"
       }
     }
   },
   "required": [
     "Mains",
-    "PSU",
-    "Bus"
+    "Buses",
+    "PSU"
   ],
   "additionalProperties": false,
   "definitions": {
@@ -47,6 +54,10 @@
       "description": "Параметры электропитания сети переменного тока",
       "type": "object",
       "properties": {
+        "ID": {
+          "type": "string",
+          "description": "Идентификатор первичного сетевого ввода (по умолчанию MAINS)"
+        },
         "Voltage": {
           "type": "number",
           "description": "Номинальное сетевое напряжение, В (по умолчанию 230)"
@@ -58,6 +69,10 @@
         "VoltageMax": {
           "type": "number",
           "description": "Максимально допустимое сетевое напряжение, В (по умолчанию 250)"
+        },
+        "CurrentMax": {
+          "type": "number",
+          "description": "Максимальный сетевой ток, А"
         },
         "PowerMax": {
           "type": "number",
@@ -81,7 +96,7 @@
           "type": "string",
           "description": "Модель батареи"
         },
-        "type": {
+        "Type": {
           "$ref": "#/definitions/BATTERY_TYPE"
         },
         "Voltage": {
@@ -95,9 +110,41 @@
       },
       "required": [
         "Model",
-        "type",
+        "Type",
         "Voltage",
         "Capacity"
+      ],
+      "additionalProperties": false
+    },
+    "PowerBusConfig": {
+      "title": "PowerBusConfig",
+      "description": "Конфигурация распределительной шины электропитания",
+      "type": "object",
+      "properties": {
+        "ID": {
+          "type": "string",
+          "description": "Идентификатор шины питания (например, BUS-1)"
+        },
+        "Voltage": {
+          "type": "number",
+          "description": "Номинальное напряжение шины, В"
+        },
+        "PSU": {
+          "type": "string",
+          "description": "Идентификатор источника питания (PSU), формирующего данную шину"
+        },
+        "UPS": {
+          "type": "array",
+          "description": "Список идентификаторов модулей ИБП, резервирующих данную шину",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ID",
+        "Voltage",
+        "PSU"
       ],
       "additionalProperties": false
     },
@@ -106,17 +153,13 @@
       "description": "Конфигурация источника питания (ИП / PSU)",
       "type": "object",
       "properties": {
-        "RefDes": {
+        "ID": {
           "type": "string",
-          "description": "Обозначение источника питания на монтажной схеме"
+          "description": "Идентификатор источника питания (например, PWR3, DRS2)"
         },
         "Model": {
           "type": "string",
           "description": "Модель источника питания"
-        },
-        "Bus": {
-          "type": "number",
-          "description": "Номер подключенной шины электропитания"
         },
         "VoltageIn": {
           "type": "number",
@@ -133,8 +176,8 @@
         "Battery": {
           "$ref": "#/definitions/BatteryConfig"
         },
-        "Field": {
-          "$ref": "./field.schema.json#/definitions/FieldRef"
+        "Control": {
+          "$ref": "./field.schema.json#/definitions/ControlConfig"
         },
         "Channels": {
           "type": "object",
@@ -165,43 +208,51 @@
         }
       },
       "required": [
-        "RefDes",
+        "ID",
         "Model",
-        "Bus",
         "VoltageIn",
         "VoltageOut",
-        "CurrentMax",
-        "Field"
+        "CurrentMax"
       ],
       "additionalProperties": false
     },
-    "BusConfig": {
-      "title": "BusConfig",
-      "description": "Конфигурация шины электропитания",
+    "UpsConfig": {
+      "title": "UpsConfig",
+      "description": "Конфигурация модуля источника бесперебойного питания (ИБП / UPS)",
       "type": "object",
       "properties": {
-        "source": {
-          "type": "boolean",
-          "default": false,
-          "description": "Флаг первичного сетевого ввода (true - сетевой ввод Mains, false - вторичная шина от источника)"
+        "ID": {
+          "type": "string",
+          "description": "Идентификатор модуля ИБП (например, UPS1)"
         },
-        "Voltage": {
-          "type": [
-            "number",
-            "string"
-          ],
-          "description": "Номинальное напряжение шины, В"
+        "Model": {
+          "type": "string",
+          "description": "Модель модуля ИБП"
+        },
+        "VoltageIn": {
+          "type": "number",
+          "description": "Входное напряжение, В"
+        },
+        "VoltageOut": {
+          "type": "number",
+          "description": "Выходное напряжение, В"
         },
         "CurrentMax": {
-          "type": [
-            "number",
-            "string"
-          ],
-          "description": "Максимально допустимый ток шины, А"
+          "type": "number",
+          "description": "Максимальный ток, А"
+        },
+        "Battery": {
+          "$ref": "#/definitions/BatteryConfig"
+        },
+        "Control": {
+          "$ref": "./field.schema.json#/definitions/ControlConfig"
         }
       },
       "required": [
-        "Voltage",
+        "ID",
+        "Model",
+        "VoltageIn",
+        "VoltageOut",
         "CurrentMax"
       ],
       "additionalProperties": false

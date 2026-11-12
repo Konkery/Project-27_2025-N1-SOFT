@@ -8,18 +8,18 @@
       "type": "object",
       "description": "Общие сетевые параметры",
       "properties": {
-        "mask": {
+        "Mask": {
           "type": "string",
           "description": "Сетевая маска (например, '255.255.255.0')"
         },
-        "gw": {
+        "GW": {
           "type": "string",
           "description": "Сетевой шлюз"
         }
       },
       "required": [
-        "mask",
-        "gw"
+        "Mask",
+        "GW"
       ],
       "additionalProperties": false
     },
@@ -85,32 +85,32 @@
       "type": "object",
       "description": "Сетевые параметры серверного ПО и сервисов",
       "properties": {
-        "LOW": {
+        "Low": {
           "type": "object",
           "properties": {
-            "REDIS": {
+            "Redis": {
               "type": "object",
               "properties": {
                 "IP": {
                   "type": "string"
                 },
-                "PORT": {
+                "Port": {
                   "type": "string"
                 }
               },
               "required": [
                 "IP",
-                "PORT"
+                "Port"
               ],
               "additionalProperties": false
             }
           },
           "required": [
-            "REDIS"
+            "Redis"
           ],
           "additionalProperties": false
         },
-        "MID": {
+        "Mid": {
           "type": "object",
           "properties": {
             "MQTT": {
@@ -119,37 +119,37 @@
                 "IP": {
                   "type": "string"
                 },
-                "PORT": {
+                "Port": {
                   "type": "string"
                 },
-                "WS_PORT": {
+                "WsPort": {
                   "type": "string"
                 },
-                "CLIENT_URL": {
+                "ClientUrl": {
                   "type": "string"
                 }
               },
               "required": [
                 "IP",
-                "PORT",
-                "WS_PORT",
-                "CLIENT_URL"
+                "Port",
+                "WsPort",
+                "ClientUrl"
               ],
               "additionalProperties": false
             },
-            "MONGODB": {
+            "MongoDB": {
               "type": "object",
               "properties": {
                 "IP": {
                   "type": "string"
                 },
-                "PORT": {
+                "Port": {
                   "type": "string"
                 }
               },
               "required": [
                 "IP",
-                "PORT"
+                "Port"
               ],
               "additionalProperties": false
             },
@@ -159,74 +159,74 @@
                 "IP": {
                   "type": "string"
                 },
-                "PORT": {
+                "Port": {
                   "type": "string"
                 }
               },
               "required": [
                 "IP",
-                "PORT"
+                "Port"
               ],
               "additionalProperties": false
             },
-            "GRAYLOG": {
+            "Graylog": {
               "type": "object",
               "properties": {
                 "IP": {
                   "type": "string"
                 },
-                "WEB": {
+                "Web": {
                   "type": "object",
                   "properties": {
-                    "PORT": {
+                    "Port": {
                       "type": "number"
                     }
                   },
                   "required": [
-                    "PORT"
+                    "Port"
                   ],
                   "additionalProperties": false
                 },
-                "INPUT": {
+                "Input": {
                   "type": "array",
                   "items": {
                     "type": "object",
                     "properties": {
-                      "PORT": {
+                      "Port": {
                         "type": "number"
                       }
                     },
                     "required": [
-                      "PORT"
+                      "Port"
                     ],
                     "additionalProperties": false
                   }
                 },
-                "URL": {
+                "Url": {
                   "type": "string"
                 }
               },
               "required": [
                 "IP",
-                "WEB",
-                "INPUT",
-                "URL"
+                "Web",
+                "Input",
+                "Url"
               ],
               "additionalProperties": false
             }
           },
           "required": [
             "MQTT",
-            "MONGODB",
+            "MongoDB",
             "NTP",
-            "GRAYLOG"
+            "Graylog"
           ],
           "additionalProperties": false
         }
       },
       "required": [
-        "LOW",
-        "MID"
+        "Low",
+        "Mid"
       ],
       "additionalProperties": false
     }
@@ -258,17 +258,9 @@
       "description": "Параметры электропитания сетевого устройства",
       "type": "object",
       "properties": {
-        "Bus": {
-          "type": "number",
-          "description": "Номер шины электропитания"
-        },
-        "Voltage": {
-          "type": "number",
-          "description": "Напряжение электропитания, В"
-        },
-        "CurrentMax": {
-          "type": "number",
-          "description": "Максимальный потребляемый ток, А"
+        "PowerBus": {
+          "type": "string",
+          "description": "Идентификатор подключенной шины электропитания или ввода (например, MAINS, BUS-1)"
         },
         "Power": {
           "type": "number",
@@ -276,9 +268,7 @@
         }
       },
       "required": [
-        "Bus",
-        "Voltage",
-        "CurrentMax",
+        "PowerBus",
         "Power"
       ],
       "additionalProperties": false
@@ -288,18 +278,18 @@
       "description": "Параметры порта сетевого устройства",
       "type": "object",
       "properties": {
-        "name": {
+        "Name": {
           "type": "string",
           "description": "Имя порта"
         },
-        "poe": {
+        "PoE": {
           "type": "boolean",
           "description": "Флаг наличия/активности PoE"
         }
       },
       "required": [
-        "name",
-        "poe"
+        "Name",
+        "PoE"
       ],
       "additionalProperties": false
     },
@@ -308,26 +298,26 @@
       "description": "Конфигурация внешнего сетевого интерфейса (WAN)",
       "type": "object",
       "properties": {
-        "name": {
+        "Name": {
           "type": "string",
           "description": "Имя uplink-порта"
         },
-        "mode": {
+        "Mode": {
           "$ref": "#/definitions/WAN_MODE"
         },
-        "ip": {
+        "IP": {
           "type": "string",
           "description": "IP-адрес (для static режима)"
         },
-        "mask": {
+        "Mask": {
           "type": "string",
           "description": "Сетевая маска (для static режима)"
         },
-        "gw": {
+        "GW": {
           "type": "string",
           "description": "Шлюз (для static режима)"
         },
-        "dns": {
+        "DNS": {
           "type": "array",
           "description": "Список IP-адресов DNS-серверов",
           "items": {
@@ -336,8 +326,8 @@
         }
       },
       "required": [
-        "name",
-        "mode"
+        "Name",
+        "Mode"
       ],
       "additionalProperties": false
     },
@@ -346,9 +336,9 @@
       "description": "Конфигурация сетевого роутера",
       "type": "object",
       "properties": {
-        "RefDes": {
+        "ID": {
           "type": "string",
-          "description": "Обозначение роутера на монтажной схеме"
+          "description": "Идентификатор роутера (например, ROUTER1)"
         },
         "Power": {
           "$ref": "#/definitions/NetPowerDeviceConfig"
@@ -356,7 +346,7 @@
         "WAN": {
           "$ref": "#/definitions/WanConfig"
         },
-        "port": {
+        "Ports": {
           "type": "array",
           "description": "Список портов роутера",
           "items": {
@@ -365,10 +355,10 @@
         }
       },
       "required": [
-        "RefDes",
+        "ID",
         "Power",
         "WAN",
-        "port"
+        "Ports"
       ],
       "additionalProperties": false
     },
@@ -377,9 +367,9 @@
       "description": "Конфигурация сетевого коммутатора",
       "type": "object",
       "properties": {
-        "RefDes": {
+        "ID": {
           "type": "string",
-          "description": "Обозначение коммутатора на монтажной схеме"
+          "description": "Идентификатор коммутатора (например, SWITCH1)"
         },
         "Model": {
           "type": "string",
@@ -394,7 +384,7 @@
         }
       },
       "required": [
-        "RefDes",
+        "ID",
         "Model",
         "PortsTotal",
         "Power"

@@ -4,6 +4,13 @@
   "description": "Конфигурация полевых шин аппарата",
   "type": "object",
   "properties": {
+    "Gateways": {
+      "type": "array",
+      "description": "Список сетевых шлюзов и конвертеров интерфейсов (Ethernet to RS485/CAN)",
+      "items": {
+        "$ref": "#/definitions/GatewayConfig"
+      }
+    },
     "RS485": {
       "type": "array",
       "description": "Список шин RS485",
@@ -33,14 +40,98 @@
   ],
   "additionalProperties": false,
   "definitions": {
+    "CONTROL_PROTOCOL": {
+      "title": "CONTROL_PROTOCOL",
+      "description": "Протокол подключения и управления устройством",
+      "type": "string",
+      "enum": [
+        "ModbusRTU",
+        "ModbusTCP",
+        "HTTP",
+        "CAN"
+      ],
+      "tsEnumNames": [
+        "MODBUS_RTU",
+        "MODBUS_TCP",
+        "HTTP",
+        "CAN"
+      ]
+    },
+    "ControlConfig": {
+      "title": "ControlConfig",
+      "description": "Параметры рабочего канала связи и управления устройством в АСУ",
+      "type": "object",
+      "properties": {
+        "Protocol": {
+          "$ref": "#/definitions/CONTROL_PROTOCOL"
+        },
+        "Bus": {
+          "type": "string",
+          "description": "Идентификатор полевой шины (RS485 или CAN)"
+        },
+        "Address": {
+          "type": "number",
+          "description": "Сетевой адрес устройства (Modbus Slave ID, CAN Node ID)"
+        },
+        "IP": {
+          "type": "string",
+          "description": "Сетевой IP-адрес устройства (для ModbusTCP, HTTP)"
+        },
+        "Port": {
+          "type": "number",
+          "description": "Сетевой TCP-порт устройства (для ModbusTCP, HTTP)"
+        },
+        "SSEPath": {
+          "type": "string",
+          "description": "Относительный URL-путь к потоку Server-Sent Events (для HTTP)"
+        }
+      },
+      "required": [
+        "Protocol"
+      ],
+      "additionalProperties": false
+    },
+    "GatewayConfig": {
+      "title": "GatewayConfig",
+      "description": "Конфигурация сетевого конвертера интерфейсов (шлюза)",
+      "type": "object",
+      "properties": {
+        "ID": {
+          "type": "string",
+          "description": "Уникальный идентификатор шлюза"
+        },
+        "Model": {
+          "type": "string",
+          "description": "Модель конвертера"
+        },
+        "IP": {
+          "type": "string",
+          "description": "IP-адрес конвертера в локальной сети"
+        },
+        "Buses": {
+          "type": "object",
+          "description": "Маппинг физических портов конвертера на идентификаторы шин RS485/CAN",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ID",
+        "Model",
+        "IP",
+        "Buses"
+      ],
+      "additionalProperties": false
+    },
     "FieldRef": {
       "title": "FieldRef",
-      "description": "Ссылка на подключение устройства к полевой шине",
+      "description": "Ссылка на подключение устройства к полевой шине (устаревший формат, используйте ControlConfig)",
       "type": "object",
       "properties": {
         "ref": {
           "type": "string",
-          "description": "Ссылка на полевую шину (например, 'hubLow/PORT1', 'ICP-CON2/com1')"
+          "description": "Ссылка на полевую шину"
         },
         "ID": {
           "type": "string",
@@ -58,25 +149,29 @@
       "description": "Конфигурация полевой шины RS485 (MODBUS/RTU)",
       "type": "object",
       "properties": {
-        "RefDes": {
+        "ID": {
           "type": "string",
-          "description": "Обозначение шины на монтажной схеме"
+          "description": "Идентификатор шины RS485"
         },
         "Master": {
           "type": "string",
-          "description": "Мастер-устройство ('hubLow', 'icpcon1' и т.д.)"
+          "description": "Мастер-устройство ('hubLow', 'ICP-CON2' и т.д.)"
         },
         "Port": {
           "type": "string",
-          "description": "Имя порта на мастере или 'ip:port'"
+          "description": "Имя порта на мастере (например, 'PORT1', 'com1')"
         },
         "Baud": {
           "type": "number",
           "description": "Скорость работы порта (бод)"
+        },
+        "TCPPort": {
+          "type": "number",
+          "description": "TCP-порт для шлюзов Ethernet-to-Serial (опционально)"
         }
       },
       "required": [
-        "RefDes",
+        "ID",
         "Master",
         "Port",
         "Baud"
@@ -88,13 +183,25 @@
       "description": "Конфигурация полевой шины CAN",
       "type": "object",
       "properties": {
-        "RefDes": {
+        "ID": {
           "type": "string",
-          "description": "Обозначение шины на монтажной схеме"
+          "description": "Идентификатор шины CAN"
+        },
+        "Master": {
+          "type": "string",
+          "description": "Мастер-устройство"
+        },
+        "Port": {
+          "type": "string",
+          "description": "Имя интерфейса (например, 'can0')"
+        },
+        "Bitrate": {
+          "type": "number",
+          "description": "Скорость шины CAN (бод)"
         }
       },
       "required": [
-        "RefDes"
+        "ID"
       ],
       "additionalProperties": false
     },
@@ -103,6 +210,10 @@
       "description": "Конфигурация сетевой полевой шины MODBUS/TCP",
       "type": "object",
       "properties": {
+        "ID": {
+          "type": "string",
+          "description": "Идентификатор шины TCP"
+        },
         "SubNet": {
           "type": "string",
           "description": "Подсеть MODBUS/TCP"
